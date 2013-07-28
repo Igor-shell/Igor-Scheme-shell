@@ -1,0 +1,194 @@
+
+	  Igor -- the lithpith thell (with a nod to Terry Pratchett)
+
+
+
+Well, actually, it's a *scheme-ish* shell.  The aim is to have the
+same basic pattern for command-line work as the dominant shells
+(redirections, backquoted commands, shell variables....) but also
+allow scheme expressions to be a part of the command line.  In
+particular, if you just type s-expressions, it ought to behave
+essentially like a standard REPL in scheme, and if you just type
+command lines, it ought to behave like the usual shells.
+
+The code is currently (2013-07-28) what I'd consider "promising alpha"
+quality. There are some glaring problems that make it uncomfortable to
+use as a login shell (a list appears below).
+
+Far more of the work is done in C than I'd like -- my scheme is
+chronically rusty.  I've been a modeller writing simulation models and
+associated programs for the last 23 years, and almost all of the work has
+been in C or C++.
+
+This document serves several purposes; it is primarily a sketchy
+tourist map that describes the existing code, and a very "back of the
+beer-mat" guide to what I think would be a good endpoint.  What it
+*isn't* is a definitive statement of where I expect things to go. My
+attitude is that really good software tends to be a matter of taste,
+and that a shell should suit the user rather than the other way
+round.  Hence, the deep and abiding interest in a scheme-based shell.
+
+I haven't set up a central repository that it publically accessible
+(that might come if there are enough people interested), but I've
+hand-crafted this very fine tar archive which ought to have just
+barely enough to get things going.
+
+Installation instructions are in the "INSTALLATION" file.
+
+
+The Tourist Guide
+=====================================================================
+
+There are three files which contain code: igor.c, external-support.c,
+and csupport.scm.  Associated with these are csupport.sld and
+csupport.stub which are processed by chibi-ffi to produce the
+csupport.so module.
+
+I'll describe the code files, assuming that the ".stub" and ".sld"
+files are relatively standard enough to make sense to anyone foolish
+enough to unpack the tar file.
+
+
+
+igor.c
+------
+
+The basic theory of operation here is that there is a routine which
+collects the typed command line and builds up a complete command;
+this command may actually span multiple lines, by the way. 
+
+The "get_commandline" routine is called by the "command_loop" (which
+may actually take its input from a file) which calls a routine to
+tokenise the command line ("tokenise_cmdline", oddly enough). The
+tokenised lists are fed through a routine which constructs a list of
+structures which contain the arguments, a flag indicating whether to
+background it and any input/output/error redirection. The list of
+command structures are then fed to the "run_commands" routine which
+handles each of the commands in turn.
+
+
+get_commandline()
+.................
+
+This routine either calls a wrapper routine for fetching a line of
+input from either a FILE* or some other source (such as the
+keyboard). The routine is passed an indication of the input source
+(either a FILE* or NULL) and a pointer to a buffer. 
+
+The routine selects an appropriate prompt generating (scheme) routine
+which returns the string to emit as a prompt. The buffer is extended
+to match whatever input is received and returned.  At the moment,
+there is code to determine if the end of the line spans an
+s-expression, or if there is a continuation line in effect.  It is
+possible to have different prompts for new lines, continuation lines
+and in theory unfinished s-expressions, though we could make this much
+more general.  
+
+
+tokenise_commandline()
+......................
+
+This routine takes a string (the commandline) and returns an argv-like
+array of strings. Symbols such as redirection operators or
+backgrounding symbols are returned as distinct strings in the
+array. Quoted things are also returned appropriately.  This is
+actually a pretty boring routine, and I suspect the glibc "wordexp"
+would do this reasonably well (apart from splitting out the
+operators), but I have a scheme function in csupport.scm which
+may fill this role in a more purely scheme version
+
+process_token_list()
+.....................
+
+A list of command elements is built up from a command line.  Each
+element includes the arguments, either a resolved pathname to an
+executable or a builtin, an indication of whether an executable should
+be backgrounded,and the file descriptors which are to be used as
+stdin, stdout and stderr.  This routine also handles backquoted
+commands (`date` for example).
+
+It also handles quoted lists so commandlines like 
+
+		'(a b c d) | tr 'a' 'A'
+give 
+	  	(A b c d)
+
+for example.  Currently 
+
+	 	'(1 2 5 7) | (map (lambda (x) (* x x)) (read-all))
+
+does not work.  
+
+
+
+run_commands()
+..............
+
+Command elements are passed in sequence through the run_commands()
+routine which decides whether to pass them to code which executes a
+builtin function like "cd", evaluate them as an s-expression, or to
+fire off a child process.  This routine doesn't need to know
+*anything* about the file descriptors since they are all set up in
+process_token_list(). There is possibly a bug indicated here --
+builtins, s-expressions and commands have their descriptors set up the
+same way, but handle them differently when they run. I'll look at
+this, but anyone else is free to fix my mistakes too.
+
+
+
+
+external_support.c
+------------------
+
+This basically just wraps file stat(2) calls and the call to
+wordexp(3).
+
+
+
+
+csupport.scm
+------------
+
+There are a lot of functions (mostly undocumented, but mostly small)
+in this file. The significant ones are
+
+	(read-all) -- which reads all the characters from the keyboard till
+		an eof is returned
+
+	(read-all-lines) -- reads *lines* from the std input till anything
+		that isn't a string is returned
+
+	(strtok str . sep) and (collapsing-strtok str . sep) are analogous
+		to the libc strtok(3) routine.  collapsing-strtok omits multiple
+		instances of the separator.
+
+	(fence-jumper str fence-pair . prune-paling) is used to skip from
+		an opening fence (like a quotation mark or an open paren) to its
+		closing fence. It returns the "fenced" part and the remainder.
+
+	(tokenise-string str tokenlist fences escape . sep) does
+		essentially the same job as its C equivalent, but takes things a
+		little more flexibly.  It should be possible to have different
+		token lists and fences based on context if one wanted.
+
+	(reconstruct-string strarray . sep) will take an argv type array
+		and construct a commandline type string.  Rather like
+		string-concatenate, really.
+
+	(*expand-path* file) uses word-expand and the PATH environment
+		variable to find existing files.
+
+	(expand-path file) uses *expand-path* to do essentially the same
+		job, but exist so it can be overloaded or replaced without
+		losing *expand-path*.
+
+	(system . args) takes a number of strings and runs execute on them
+		-- like the unix system(2) except that rather than one string it
+		takes each separately
+
+	(call string) .... like system(2)
+
+
+There are also approximations to the dispatch functions in "igor.c"
+
+

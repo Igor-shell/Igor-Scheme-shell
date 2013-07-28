@@ -1,0 +1,194 @@
+;;(require 'stdio)
+
+
+;b_extras = `{find /usr/local /opt -type d -name bin} #`
+;s_extras = `{find /usr/local /opt -type d -name sbin} #`
+;system_directories = (/usr/bin /usr/sbin /bin /sbin /opt/Citrix/ICAClient)
+;path = ($HOME/bin $b_extras $s_extras $system_directories)
+
+
+(set-env "TRACK_EXECV" "0" 1)
+
+(set-env "PATH" "/home/gray/bin:/usr/games/bin:/usr/local/bin/:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin" 1)
+;;(system "limit" "coredumpsize" "unlimited")
+
+;;(define (filter pred lst) 
+;;  (cond ((null? lst) '()) 
+;;		  ((not (list? lst)) #f) 
+;;		  ((pred (car lst)) (cons (car lst) (filter pred (cdr lst)))) 
+;;		  (else (filter pred (cdr lst)))))
+
+(define *igor-history-file* "/home/gray/.igor-history")
+
+(define hf (let ((hfile #f))
+				 (lambda x
+					(if hfile
+						 (begin
+							(set! *igor-history-file* hfile)
+							(set! hfile #f)
+							)
+						 (begin
+							(set! hfile *igor-history-file*)
+							(set! *igor-history-file* #f)
+							)
+						 ))))
+
+(define (prompt . args)
+	(let ((fs (file-stat "/home/gray/Mail/Incoming/Current")))
+	  (if (zero? (get-stat-size fs)) "Yeth? " "You have mail, Thur. ")))
+	  
+
+
+(define (prompt-for-continuation . args) "And?     " )
+
+
+(define (prompter . args) (string-append *igor-prompt-for-continuation-string* " "))
+
+;(define (error-prompt failure . args)
+;  ;;(printf "%s )-: " (pstring "`hostname | tr a-z A-Z` `pwd`"))
+;  
+;  (display (string-append "[" (if (string? failure) failure (object->string failure)) "]" (prompt args)))
+;  )
+           
+
+
+
+	 
+
+
+
+
+
+;; This will take all the input in from a pipe/file and put it into a list
+;;(define (read-all)
+;;  (let loop ((bit (read))
+;;				 (file '()))
+;;	 (if (eof-object? bit)
+;;		  (reverse file)
+;;		  (loop (read) (cons bit file)))))
+
+
+
+
+;;(define cd (let ((ocd cd))
+;;				 (lambda . x
+;;							(if (null? x)
+;;								 (ocd)
+;;								 (let ((x* (word-expand x)))
+;;									(if (> (length x*) 1)
+;;										 (begin
+;;											(display "Too many matches: ")
+;;											(display x*)
+;;											(newline)
+;;											#f)
+;;										 (ocd (car x))))))))
+
+
+
+(display "Loaded, thur.\n")
+
+
+;;; (define (call-with-input-port p thunk) ***
+;;;   (let ((pp (current-input-port))) ***
+;;;     (current-input-port p) ***
+;;;     (thunk) ***
+;;;     (current-input-port pp))) ***
+
+;;; (define (call-with-output-port p thunk) ***
+;;;   (let ((pp (current-output-port))) ***
+;;;     (current-output-port p) ***
+;;;     (thunk) ***
+;;;     (current-output-port pp))) ***
+
+;;; (define (call-with-error-port p thunk) ***
+;;;   (let ((pp (current-error-port))) ***
+;;;     (current-error-port p) ***
+;;;     (thunk) ***
+;;;     (current-error-port pp))) ***
+
+
+;;; (define (with-no-stdout thunk) ***
+;;;   (let ((p (open-output-file "/dev/null"))) ***
+;;;     (call-with-output-port p thunk) ***
+;;;     (close-port p))) ***
+
+;;; (define (with-no-stderr thunk) ***
+;;;   (let ((p (open-output-file "/dev/null"))) ***
+;;;     (call-with-error-port p thunk) ***
+;;;     (close-port p))) ***
+
+;;; (define (with-no-stderr/stdout thunk) ***
+;;;   (let ((p (open-output-file "/dev/null"))) ***
+;;;     (call-with-error-port  ***
+;;;      p  ***
+;;;      (lambda () (with-no-stdout thunk))) ***
+;;;     (close-port p))) ***
+
+
+;;; ;; This returns the output from "thunk" in a string ***
+;;; (define (capture-string-from thunk) ***
+;;;   (let ((sp (open-output-string))) ***
+;;;     (call-with-output-port sp thunk) ***
+;;;     (let ((result (get-output-string sp))) ***
+;;;       (close-port sp) ;; *\*\** chibi needs a close-port ***
+;;;       result))) ***
+
+;;; (define (load-lines-from-port f) ***
+;;;   (let loop ((line (read-line f)) ***
+;;; 	     (file '()) ***
+;;; 	     ) ***
+;;;     (if (eof-object? line) ***
+;;; 	file ***
+;;; 	(loop (read-line f) (append file (list line))) ***
+;;; 	))) ***
+
+
+;;; ;; This returns the output from "thunk" in a list of string ***
+;;; (define (capture-lines-from thunk) ***
+;;;   (let ((sp (open-output-string))) ***
+;;;     (call-with-output-port sp thunk) ***
+;;;     (let ((result (load-lines-from-port sp))) ***
+;;;       (close-port sp) ;; *\*\** chibi needs a close-port ***
+;;;       result))) ***
+
+;;; (define (load-list-from-port f) ***
+;;;   (let loop ((line (read-line f)) ***
+;;; 	     (port '()) ***
+;;; 	     ) ***
+;;;     (if (not (eof-object? line)) ***
+;;; 	(loop (read-line f) (append port (list (collapsing-strtok line " \t")))) ***
+;;; 	port))) ***
+
+
+;;; (define (capture-list-from thunk) ***
+;;;   (let ((sp (open-output-string))) ***
+;;;     (call-with-output-port sp thunk) ***
+;;;     (let ((result (load-list-from-port sp))) ***
+;;;       (close-port sp) ;; *\*\** chibi needs a close-port ***
+;;;       result))) ***
+
+;;; (define (load-flat-list-from-port f) ***
+;;;   (let loop ((line (read-line f)) ***
+;;; 	     (port '()) ***
+;;; 	     ) ***
+;;;     (if (not (eof-object? line)) ***
+;;; 	(loop (read-line f) (append port (collapsing-strtok line " \t"))) ***
+;;; 	port))) ***
+
+;;; (define (capture-flat-list-from thunk) ***
+;;;   (let ((sp (open-output-string))) ***
+;;;     (call-with-output-port sp thunk) ***
+;;;     (let ((result (load-flat-list-from-port sp))) ***
+;;;       (close-port sp) ;; *\*\** chibi needs a close-port ***
+;;;       result))) ***
+
+
+;(display "Finithed, thur. ")
+
+;;; Local Variables: ***
+;;; mode: scheme ***
+;;; outline-regexp: ";-+" ***
+;;; comment-column:0 ***
+;;; comment-start: ";;; "  ***
+;;; comment-end:"***" ***
+;;; End: ***
