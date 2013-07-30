@@ -130,7 +130,6 @@ char *supporting_initialisation[] = {
 
 	"(import (local csupport))", // load the extra routines from csupport.stub/external-support.c
 
-   // This provides access to get-env and set-env
 	"(define *igor-prompt-for-continuation-string* \"\")",
 	"(define *igor-history-file*  #f)",
 	"(define *igor-version*  \'(igor 0 1 \"dogfoodable\"))",
@@ -147,16 +146,6 @@ char *supporting_initialisation[] = {
 	"(define (*wetp* p l) (let ((pp (current-error-port)))(current-error-port p)(l)(current-error-port pp)))",
 	"(define (*wps* i o e l) (let ((pi (current-input-port))(po (current-output-port))(pe (current-error-port)))(current-input-port i)(current-output-port o)(current-error-port e)(l) (current-input-port pi)(current-output-port po)(current-error-port pe)))",
 
-	"(define *igor-prompt-for-continuation-string* \"\")",
-	"(define *igor-history-file*  #f)",
-	"(define *igor-version*  \'(igor 0 1 \"dogfoodable\"))",
-	"(define *running-script* 0)",
-
-	// variables
-	"*igor-input-source-port*",
-	"*igor-output-capture-port*",
-	"*igor-swap-input-source-port*",
-	"*igor-swap-output-capture-port*",
 	NULL};
 
 
@@ -272,8 +261,8 @@ char *completed_path(char *s) {
 		if (*s == '/' || !strncmp(s,"./",2) || !strncmp(s,"../",3))  return strdup(s); // it is an absolute or relative reference
 		asprintf(&sexpr,"(expand-path \"%s\")", s);
 		t = evaluate_scheme_expression(sexpr);
-
-		return t;
+		if (!strcmp(t,"#f") && access(t,F_OK)) return NULL;
+		else return t;
 	}
 	return NULL;
 }
@@ -541,7 +530,8 @@ char *read_line(FILE *f, char *prompt_function) {
 		if (!f) {
 			Free(history_file);
 			history_file = evaluate_scheme_expression("*igor-history-file*");
-			if (!strcmp(history_file,"#f")) {
+			if (!history_file || !strcmp(history_file,"#f")) {
+				Free(history_file);
 				Free(f);
 			}
 		}
@@ -886,9 +876,9 @@ char *evaluate_scheme_expression(char *Sexpr) {
 		sexpr = guard_definitions(((run_word_expand && psexpr) ? psexpr : Sexpr));
 
 		asprintf(&wsexpr, "(let ((output (open-output-string)) (rslt #f))" 
-			"(display %s output)"
-			"(set! rslt (get-output-string output))"
-			"(close-output-port output) rslt)", sexpr);
+			"  (display %s output)"
+			"  (set! rslt (get-output-string output))"
+			"  (close-output-port output) rslt)", sexpr);
 
 		result = check_exception(ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
 
@@ -899,6 +889,7 @@ char *evaluate_scheme_expression(char *Sexpr) {
 				rstr = strdup("");
 			}
 			else if (sexp_stringp(result)) rstr = strdup(sexp_string_data(result));
+		
 			else asprintf(&rstr,"Failed to evaluate [%s]\n", sexpr);
 		}
 		Dprintf(stderr,"[%s]\n", rstr);
@@ -1392,14 +1383,11 @@ char **word_expansion(char **argv, int *argc, int argix) {
 	return argv;
 }
 
-cmd_t *process_token_list(char **Argv, int in, int out,int err, int *ix) {
+cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 	int Argc;
 	int i = 0;
 	cmd_t *C = new_cmd_t();
-	int IX = 0;
 	char *fname = NULL;
-
-	if (!ix) ix = &IX;
 
 	for (Argc = 0; Argv[Argc]; Argc++) {
 		//char *s = Argv[Argc];
@@ -1570,7 +1558,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err, int *ix) {
 				pipe(pipefd);
 				C->out = pipefd[1];
 				C->shuto = 1;
-				C->next = process_token_list(Argv + i, pipefd[0], out, err, ix);
+				C->next = process_token_list(Argv + i, pipefd[0], out, err);
 				return C;
 			}
 			else if (!strcmp(Argv[i], errpipe)) {
@@ -1587,7 +1575,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err, int *ix) {
 
 				C->err = pipefd[1];
 				C->shute = 1;
-				C->next = process_token_list(Argv + i, pipefd[0], out, err, ix);
+				C->next = process_token_list(Argv + i, pipefd[0], out, err);
 				return C;
 			}
 			else if (!strcmp(Argv[i], outerrpipe)) {
@@ -1604,7 +1592,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err, int *ix) {
 
 				C->out = C->err = pipefd[1];
 				C->shuto = C->shute = 1;
-				C->next = process_token_list(Argv + i, pipefd[0], out, err, ix);
+				C->next = process_token_list(Argv + i, pipefd[0], out, err);
 				return C;
 			}
 			else if (!strcmp(Argv[i], makebg)) {
@@ -1612,13 +1600,13 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err, int *ix) {
 				C->argv[C->argc+1] = 0;
 				C->bg = 1;
 				C->argv[C->argc] = 0;
-				C->next = process_token_list(Argv + i, in, out, err, ix);
+				C->next = process_token_list(Argv + i, in, out, err);
 				return C;
 			}
 			else if (!strcmp(Argv[i], nextsep)) {
 				i++;
 				C->argv[C->argc+1] = 0;
-				C->next = process_token_list(Argv + i, in, out, err, ix);
+				C->next = process_token_list(Argv + i, in, out, err);
 				return C;
 			}
 			else if (!strcmp(Argv[i], begblock)) {
@@ -1662,42 +1650,64 @@ int execute_builtin(Builtin *op, char **argv, int input, int output, int error, 
 	int r;
 	int in = -2, out = -3, err = -4;
 	
-#if 0 // This was a bad idea, I think.
-	in = dup(0);
-	if (in >= 3) {
-		close(0);
-		dup2(input, 0);
+#if 0
+	char *cmd = *argv;
+	char **ss;
+	fprintf(stderr,"execute_builtin %s [", cmd);
+	for (ss = argv; *ss; ss++) {
+		if (ss == argv) fprintf(stderr,"%s", *ss);
+		else  fprintf(stderr,", %s", *ss);
+	}
+	fprintf(stderr,"] ");
+	
+	fprintf(stderr,"<%d,%d> &%d", input, output, error);
+	return 0;
+#endif
+
+#if 1 // This was a bad idea, I think.
+	if (input != 0) {
+		in = dup(0);
+		if (in >= 3) {
+			close(0);
+			dup2(input, 0);
+		}
 	}
 
-	out = dup(1);
-	if (out >= 3) {
-		close(1);
-		dup2(output, 1);
+	if (output != 1) {
+		out = dup(1);
+		if (out >= 3) {
+			close(1);
+			dup2(output, 1);
+		}
 	}
 
-	err = dup(2);
-	if (err >= 3) {
-		close(2);
-		dup2(error, 2);
+	if (error != 2) {
+		err = dup(2);
+		if (err >= 3) {
+			close(2);
+			dup2(error, 2);
+		}
 	}
 
 #endif
+
 	r = (op->func)(argv, input, output, error, shuto, shute);
 
-#if 0 // This was a bad idea, I think.
-	if (in >= 0 ) {
+#if 1 // This was a bad idea, I think.
+
+	if (input != 0 && in >= 0 ) {
 		close(0);
 		dup2(in, 0);
 		close(in);
 	}
 		
-	if (out >= 0 ) {
+	if (output != 1 && out >= 0 ) {
 		close(1);
 		dup2(out, 1);
 		close(out);
 	}
 
-	if (err >= 0) {
+	if (error != 3 && err >= 0) {
 		close(2);
 		dup2(err, 2);
 		close(err);
@@ -1706,6 +1716,7 @@ int execute_builtin(Builtin *op, char **argv, int input, int output, int error, 
 #endif
 	return r;
 }
+
 
 int scm_execute_single_process(int in_the_background, char *cmd, char **argv, int input, int output, int error) {
 //	int i, o, e;
@@ -1738,9 +1749,22 @@ int scm_execute_single_process(int in_the_background, char *cmd, char **argv, in
 
 
 
-
 int c_execute_single_process(int in_the_background, char *cmd, char **argv, int input, int output, int error) {
 	int procid = -1;
+
+#if 0
+	char **ss;
+	fprintf(stderr,"C %s [", cmd);
+	for (ss = argv; *ss; ss++) {
+		if (ss == argv) fprintf(stderr,"%s", *ss);
+		else  fprintf(stderr,", %s", *ss);
+	}
+	fprintf(stderr,"] ");
+	
+	fprintf(stderr,"<%d,%d> &%d", input, output, error);
+	fprintf(stderr, " %s\n", (in_the_background ? "&" : ""));
+	return 0;
+#endif
 
 	if (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
 
@@ -1845,6 +1869,10 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, int 
 		return -1;
 	}
 }
+
+
+
+
 
 int run_commands(cmd_t *cmd) {
 	int n = 0;
@@ -2030,7 +2058,7 @@ int execute_command_string(char *cmds) {
 
 	argv = tokenise_cmdline(cmds);
 
-	C = process_token_list(argv,0,1,2,NULL);
+	C = process_token_list(argv,0,1,2);
 			
 	if (C) {
 		int n =  run_commands(C);
@@ -2068,8 +2096,6 @@ void command_loop(FILE *f) {
 
 		update_internal_c_variables();
 
-
-
 		if (*cmd != '\n' && *cmd != '\r' && *cmd) {
 			if (!strcmp(cmd,"exit")) return;
 
@@ -2079,7 +2105,7 @@ void command_loop(FILE *f) {
 				Dprintf("** argv[%d] = %s\n",i, argv[i]);
 			}
 			
-			C = process_token_list(argv,0,1,2,NULL);
+			C = process_token_list(argv,0,1,2);
 			//write(1,C->argv[0], strlen(C->argv[0]));
 			//write(1,"\n",1);
 
@@ -2343,6 +2369,24 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 	// This is wrong, really.  It ought to be incorporated in the structure sent to run_commands
 	int r = 0;
 
+	
+#if 0
+	char *cmd = *argv;
+	char **ss;
+	fprintf(stderr,"scheme %s [", cmd);
+	for (ss = argv; *ss; ss++) {
+		if (ss == argv) fprintf(stderr,"%s", *ss);
+		else  fprintf(stderr,", %s", *ss);
+	}
+	fprintf(stderr,"] ");
+	
+	fprintf(stderr,"<%d,%d> &%d", in, out, err);
+//	fprintf(stderr, " %s\n", (in_the_background ? "&" : ""));
+	return 0;
+#endif
+
+
+
 #if defined(USES_CHIBI) || defined(USES_GAMBIT) || defined(USES_GUILE)
 	// Need to collect *all* the arguments  and process them as input....
 	int i, n, k;
@@ -2367,8 +2411,6 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 
 
 	i = 0;
-
-
 
 #if 1
 	segment = evaluate_scheme_expression(argv[i]);
@@ -2414,6 +2456,8 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 		}
 
 	}
+//	if (in != IN) close(in); /*****/
+
 #else
 	for (i = 0; argv[i]; i++) {
 		int n = line ? strlen(line) : 0;
@@ -2627,6 +2671,7 @@ int main(int argc, char **argv) {
 	  sexp_release_object(ctx,elf);
   }
 #endif
+
 
   code = igor(argc, argv);
 

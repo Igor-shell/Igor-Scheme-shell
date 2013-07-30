@@ -20,15 +20,14 @@
 
 	;; csupport.scm
 	;;; variables
-	paren-fence-list
-	bracket-fence-list
-	brace-fence-list
-	quote-fence-list
-	igor-token-list
+	;;	paren-fence-list
+	;;	bracket-fence-list
+	;;	brace-fence-list
+	;;	quote-fence-list
+	;;	igor-token-list
 
 	*igor-report-backgrounding*
 	*igor-builtin-list*
-
 
 	;; functions
 	andf orf ++ -- read-all read-all-lines in-range pipe-input show 
@@ -43,6 +42,15 @@
 	with-error-to-port
 	with-io-ports
 
+	acons
+	abort
+	list-ref
+	list-set!
+	list-set-car!
+	list-set-cdr!
+
+	list-tail
+	
 	strip-fences
 	tokenise-string
 
