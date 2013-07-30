@@ -2230,18 +2230,15 @@ int load_igor_rc(char *urc) {
 	static char *igoretcrc = "/etc/igor.rc";
 	const int use_load = 1;
 	char userrc[512];
-	char pwen[512];
+	const struct passwd* pwen;
 	int id = getuid();
-	char *hdir;
+	const char *hdir;
 	
 	sexp_gc_var2(fname,rtn);
 	sexp_gc_preserve2(ctx, fname,rtn);
 	
-	getpw(id, pwen);
-	hdir = strrchr(pwen,':');
-	*hdir = 0;
-	hdir = strrchr(pwen,':');
-	hdir++;
+	pwen = getpwuid(id);
+	hdir = pwen ? pwen->pw_dir : "/";
 
 	if (access(igoretcrc, R_OK) == Ok) { 
 		fname = sexp_c_string(ctx, igoretcrc, -1);
@@ -2737,6 +2734,7 @@ int main(int argc, char **argv) {
   int code = 0;
   char **ss;
   char *s;
+  sexp res;
 
   // These are the stdin, stdout and stderr on entry
   IN = dup(0); 
@@ -2758,7 +2756,10 @@ int main(int argc, char **argv) {
   sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
   sexp_intern(ctx,"*igor-swap-output-capture-port*", -1);
 
-  for (ss = supporting_initialisation; ss && *ss; ss++)  sexp_eval_string(ctx,*ss, -1, env);
+  for (ss = supporting_initialisation; ss && *ss; ss++) {
+    res = sexp_eval_string(ctx,*ss, -1, env);
+    if (sexp_exceptionp(res)) sexp_print_exception(ctx, res, SEXP_FALSE);
+  }
 
 
 #if defined(extra_load_file)

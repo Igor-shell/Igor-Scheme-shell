@@ -21,11 +21,14 @@ CXXFLAGS = -g
 OBJS =
 SRCS = $(OBJS:.o=.c)
 
+# "make SO=dylib" for OS X
+# TODO: use auto-detection from chibi's Makefile
+SO ?= so
 
 
 
-igor: igor.c local/csupport.sld local/csupport.so
-	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -L/usr/local/lib -lreadline -lhistory -lchibi-scheme
+igor: igor.c local/csupport.sld local/csupport.$(SO)
+	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
 	chmod a+rx igor
 
 install:
@@ -38,12 +41,12 @@ install-links:
 	echo ... for me it is 
 	echo '    ln -s ~/igor/local /usr/local/lib64/chibi/'
 
-local: igor.c local/csupport.sld local/csupport.so
+local: igor.c local/csupport.sld local/csupport.$(SO)
 	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -L/usr/local/lib -lreadline -lhistory -lchibi-scheme
 	chmod a+rx igor
 
-local/csupport.so: local/external-support.c local/csupport.sld local/csupport.stub
-	make -C local clean csupport.so
+local/csupport.$(SO): local/external-support.c local/csupport.sld local/csupport.stub
+	make -C local clean csupport.$(SO)
 	make
 
 clean:

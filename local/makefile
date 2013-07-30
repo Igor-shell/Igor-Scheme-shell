@@ -20,11 +20,12 @@ CXXFLAGS = -g
 
 OBJS =
 SRCS = $(OBJS:.o=.c)
+SO ?= so
 
-csupport.so: csupport.stub external-support.c
+csupport.$(SO): csupport.stub external-support.c
 	chibi-ffi csupport.stub
-	gcc -fPIC -shared csupport.c -o csupport.so -lchibi-scheme
+	gcc -fPIC -shared csupport.c -o csupport.$(SO) -lchibi-scheme
 
 
 clean:
-	rm -f csupport.c csupport.so
+	rm -f csupport.c csupport.$(SO)
