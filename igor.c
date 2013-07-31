@@ -1317,15 +1317,15 @@ char *handle_filename(char *s) {
 	char *t = NULL;
 	int n;
 
-	fprintf(stderr,"handle_filename: %s\n",s);
-
 	if (*s == '(') { // Kludge!
 		if (is_sexp(s)) {
-			fprintf(stderr,"1\n");
 			t = evaluate_scheme_expression(s);
+			if (!*t) {
+				Free(t);
+				return NULL;
+			}
 		}
 		else {
-			fprintf(stderr,"2\n");
 			t = strdup(s);
 		}
 	}
@@ -1333,7 +1333,6 @@ char *handle_filename(char *s) {
 		n = wordexp(s, &arg, 0);
 		
 		if (n != 0) {
-			fprintf(stderr,"3\n");
 			t = strdup(s);
 		}
 		else {
@@ -1349,7 +1348,6 @@ char *handle_filename(char *s) {
 			}
 
 			else {
-				fprintf(stderr,"4\n");
 				t = strdup(arg.we_wordv[0]);
 				wordfree(&arg);
 			}
@@ -1528,7 +1526,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				i++;
 				if (fname) {
 					if (!access(fname,F_OK)) unlink(fname);
-					C->out = open(fname, O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					C->out = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
 					free(fname);
 				}
 			}
@@ -1546,7 +1544,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				i++;
 				if (fname) {
 					if (!access(Argv[i], F_OK)) unlink(fname);
-					C->err = open(fname, O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					C->err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
 					free(fname);
 				}
 			}
@@ -1564,7 +1562,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				i++;
 				if (fname) {
 					if (!access(fname, F_OK)) unlink(fname);
-					C->out = C->err = open(fname, O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					C->out = C->err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
 					free(fname);
 				}
 			}
@@ -2258,6 +2256,19 @@ int exit_func(char **argv, int in, int out, int err, int shuto, int shute) {
 int set_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	if (argv[1]) {
 		char *cmd;
+		int i;
+
+		for (i = 1; argv[i]; i++) {
+			if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+				char *ss = evaluate_scheme_expression(argv[i]);
+				if (ss) {
+					free(argv[i]);
+					argv[i] = ss;
+				}
+			}
+		}
+
+
 		if (argv[2]) {
 			setenv(argv[1], argv[2], 1);
 			asprintf(&cmd, "(define %s \"%s\")", argv[1], argv[2]);
@@ -2304,6 +2315,18 @@ int exec_func(char **argv, int in, int out, int err, int shuto, int shute) {
 
 int cd_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	/*** change this so it can be replaced by a scheme routine ***/
+	int i;
+
+	for (i = 1; argv[i]; i++) {
+		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+			char *ss = evaluate_scheme_expression(argv[i]);
+			if (ss) {
+				free(argv[i]);
+				argv[i] = ss;
+			}
+		}
+	}
+
 	if (argv && *argv) {
 #if 1
 		sexp_gc_var1(rslt);
@@ -2379,6 +2402,17 @@ int source_func(char **argv, int in, int out, int err, int shut_output, int shut
 	int i;
 
 	for (i = 1; argv[i]; i++) {
+		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+			char *ss = evaluate_scheme_expression(argv[i]);
+			if (ss) {
+				free(argv[i]);
+				argv[i] = ss;
+			}
+		}
+	}
+
+
+	for (i = 1; argv[i]; i++) {
 		if (run_source_file(argv[i])) {
 			// Failed
 			fprintf(stderr,"igor: Terminating source command.\n");
@@ -2408,8 +2442,6 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 //	fprintf(stderr, " %s\n", (in_the_background ? "&" : ""));
 	return 0;
 #endif
-
-
 
 #if defined(USES_CHIBI) || defined(USES_GAMBIT) || defined(USES_GUILE)
 	// Need to collect *all* the arguments  and process them as input....
