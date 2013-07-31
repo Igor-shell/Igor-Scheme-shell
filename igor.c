@@ -33,11 +33,15 @@
 //#define USES_GUILE
 
 //#define Dprintf(format, args...) printf(format, ##args)
+//#define DPTprintf(format, args...) printf(format, ##args)
 
 #if !defined(Dprintf)
 #define Dprintf(format, args ...)
 #endif
 
+#if !defined(DPTprintf)
+#define DPTprintf(format, args ...)
+#endif
 
 /*-  Configuration stuff  */
 
@@ -542,15 +546,10 @@ char *read_line(FILE *f, char *prompt_function) {
 		Free(prompt);
 	}
 	else {
-		//fprintf(stderr,"** Loading from file\n");
-
 		//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
 		if (k < 0) k = n1 + n2;
 		cmd = NULL;
-
-//		fprintf(stderr,">k = %d (%d + %d)\n",k, n1, n2);
-//		fprintf(stderr,">linebuffer = %s\n", linebuffer);
 
 		if (!linebuffer && !(linebuffer = malloc(k))) Abort("Out of memory");
 		*linebuffer = 0;
@@ -568,8 +567,6 @@ char *read_line(FILE *f, char *prompt_function) {
 			fgets(linebuffer+n, k-n, f);
 		}
 
-		//fprintf(stderr,"** got '%s'\n", linebuffer);
-
 		n = strlen(linebuffer);
 		if (n > 0 && linebuffer[n-1] == '\n') {
 			linebuffer[n-1] = 0;
@@ -577,9 +574,6 @@ char *read_line(FILE *f, char *prompt_function) {
 		}
 		else if (n > 0) cmd = strdup(linebuffer); // Must have hit the end of the file without a newline
 		else cmd = NULL;
-
-//		fprintf(stderr,"<k = %d (%d + %d)\n",k, n1, n2);
-//		fprintf(stderr,"<linebuffer = %s\n", linebuffer);
 	}
 
 	if (f && feof(f) && linebuffer && !*linebuffer) {
@@ -753,8 +747,6 @@ char *paren_protection(char *s, char escape, int mask) {
 	
 	if (!s) return s;
 	
-	//fprintf(stderr,"Protecting [%s]\n", s);
-
 	if (mask) {
 		fence = '(';
 		unfence = ')';
@@ -857,19 +849,13 @@ char *evaluate_scheme_expression(char *Sexpr) {
 		sexp_gc_var1(result);
 		sexp_gc_preserve1(ctx, result);
 
-		//fprintf(stderr,"Evaluating [%s]\n", sexpr);
-		
-		
 #if 0
 		if ((run_word_expand = (*sexpr == *shellcmd))) {
 			char *tp;
-			//fprintf(stderr,"... and protecting the parentheses\n");
 			tp = strdup(Sexpr + 1);
 			psexpr = word_expand_string(tp);
-			//fprintf(stderr,"expanded form: [%s]\n",psexpr);
 			Free(tp);
 			paren_protection(psexpr, escape, 0);
-			//fprintf(stderr,"... got\n        [%s]\n",psexpr);
 		}
 #endif			
 
@@ -1187,7 +1173,6 @@ char **tokenise_cmdline(char *cmdline) {
 			char *tcp = jump_sexp(cp+1, escape);
 			int n = collecting?strlen(collecting):1;
 
-			//fprintf(stderr,"Quoted list or open sexpression\n");
 			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)realloc(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
 			strncpy(collecting+i, cp, tcp - cp);
 			collecting[i+tcp - cp] = 0;
@@ -1431,16 +1416,20 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 			//if (strcmp("(,", *Argv[i])) { // Catch the scheme stuff early
 			//}
 			else if (!strncmp(Argv[i], quotedlist, strlen(quotedlist)) || !strncmp(Argv[i], shellcmd, strlen(shellcmd))) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				C->argv[C->argc++] = Argv[i];
 				C->argv[C->argc] = 0;
 			}
 			else if (!strcmp(Argv[i], heredoc)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				fprintf(stderr,"here documents not supported yet\n");
 				C->errcond = 255;
 				return C;
 			}
 			else if (!strcmp(Argv[i], stdoutapp)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to append stdout to!");
 					C->errcond = 1;
@@ -1450,15 +1439,22 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					C->out = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (C->out < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
 				else C->errcond = 1;
 			}
 			else if (!strcmp(Argv[i], stderrapp)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to append stderr to!");
 					C->errcond = 1;
@@ -1468,15 +1464,22 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					C->err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (C->err < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
 				else C->errcond = 1;
 			}
 			else if (!strcmp(Argv[i], stdouterrapp)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to append stdout and stderr to!");
 					C->errcond = 1;
@@ -1486,15 +1489,22 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					C->out = C->err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (C->out < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
 				else C->errcond = 1;
 			}
 			else if (!strcmp(Argv[i], stdinredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to read stdin from!");
 					C->errcond = 1;
@@ -1504,16 +1514,23 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					C->in = open(fname, O_RDONLY);
+					if (C->in < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
 				else C->errcond = 1;
 				
 			}
 			else if (!strcmp(Argv[i], stdoutredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to write stdout to!");
 					C->errcond = 1;
@@ -1523,15 +1540,23 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					if (!access(fname,F_OK)) unlink(fname);
 					C->out = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (C->out < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
+				else C->errcond = 1;
 			}
 			else if (!strcmp(Argv[i], stderredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to write stderr to!");
 					C->errcond = 1;
@@ -1541,15 +1566,23 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					if (!access(Argv[i], F_OK)) unlink(fname);
 					C->err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (C->err < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
+				else C->errcond = 1;
 			}
 			else if (!strcmp(Argv[i], stdouterredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				if (i >= Argc) {
 					fprintf(stderr,"No filename specified to write stderr to!");
 					C->errcond = 1;
@@ -1559,15 +1592,22 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				fname = handle_filename(Argv[i]);
 				Free(Argv[i]);
 
-				i++;
-				if (fname) {
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				if (fname && *fname) {
 					if (!access(fname, F_OK)) unlink(fname);
 					C->out = C->err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (C->out < 0) {
+						C->errcond = 1;
+						fprintf(stderr,"Unable to open file: %s (%s)", fname, strerror(errno));
+					}
 					free(fname);
 				}
+				else C->errcond = 1;
 			}
 			else if (!strcmp(Argv[i], outpipe)) {
 				int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				if (i >= Argc) {
 					fprintf(stderr,"Nothing specified to write stdout to!");
@@ -1585,6 +1625,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 			}
 			else if (!strcmp(Argv[i], errpipe)) {
 				int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				if (i >= Argc) {
 					fprintf(stderr,"Nothing specified to write stderr to!");
@@ -1602,6 +1643,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 			}
 			else if (!strcmp(Argv[i], outerrpipe)) {
 				int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				if (i >= Argc) {
 					fprintf(stderr,"Nothing specified to write stdout and stderr to!");
@@ -1618,6 +1660,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				return C;
 			}
 			else if (!strcmp(Argv[i], makebg)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				C->argv[C->argc+1] = 0;
 				C->bg = 1;
@@ -1626,18 +1669,21 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				return C;
 			}
 			else if (!strcmp(Argv[i], nextsep)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				C->argv[C->argc+1] = 0;
 				C->next = process_token_list(Argv + i, in, out, err);
 				return C;
 			}
 			else if (!strcmp(Argv[i], begblock)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				fprintf(stderr,"No blocks yet, sorry\n");
 				C->errcond = 3;
 				return C;
 			}
 			else if (!strcmp(Argv[i], endblock)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
 				fprintf(stderr,"Missing begin block!\n");
 				C->errcond = 4;
@@ -1816,7 +1862,6 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, int 
 	}
 	else if (!procid) { // this is the child
 		int n;
-		//fprintf(stderr,"CHILD: %s %d %d %d\n", cmd, input, output, error);
 		fflush(stderr);
 
 #define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {	\
@@ -2470,14 +2515,12 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 
 #if 1
 	segment = evaluate_scheme_expression(argv[i]);
-	//fprintf(stderr,"argv[%d] = %s ==> [%s]\n",i, argv[i],segment);
 	if (segment) {
 		k = strlen(segment);
 		line = (char *)realloc(line, n + k + 3); // we do this rather than strdup so we have room for space and newline
 		strcpy(line, segment);
 		n = strlen(line);
 		
-	   //fprintf(stderr,"argv[%d] = %s ==> [%s]\n",i, argv[i],segment);
 		Free(segment);
 	}
 	//SEXP_UNDEF SEXP_VOID !sexp_exceptionp(ERRCON)
@@ -2508,7 +2551,6 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 					ERRCON = SEXP_TRUE;
 				}
 			}
-		//fprintf(stderr,"[%s]\n",line);
 		}
 
 	}
@@ -2658,7 +2700,6 @@ int igor(int argc, char **argv) {
 		else if (strcmp(argv[ 1 ], "--") == 0) { // This is a shell command
 			Free(history_file);
 			history_file = NULL; // we don't want to add script things to the history
-			//fprintf(stderr,"** processing -- '%s'\n", argv[2]);	
 
 			return run_source_file(argv[2]);
 		}
@@ -2666,7 +2707,6 @@ int igor(int argc, char **argv) {
 			Free(history_file);
 			history_file = NULL; // we don't want to add script things to the history
 
-			//fprintf(stderr,"** processing -- '%s'\n", argv[2]);
 			FILE *f = fopen(argv[2],"r");
 			if (f) {
 				scripting(1);
