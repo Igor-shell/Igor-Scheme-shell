@@ -2512,12 +2512,16 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 void install_builtins() {
 	builtins = insert_builtin(builtins, "exec", exec_func);
 	builtins = insert_builtin(builtins, "source", source_func);
-	builtins = insert_builtin(builtins, ".", source_func);
+	builtins = insert_builtin(builtins, ".", source_func); // alias
 	builtins = insert_builtin(builtins, "scm", scm_func);
 	builtins = insert_builtin(builtins, "exit", exit_func);
 	builtins = insert_builtin(builtins, "cd", cd_func);
 	builtins = insert_builtin(builtins, "set", set_func);
+	builtins = insert_builtin(builtins, "setenv", set_func); // alias
+	builtins = insert_builtin(builtins, "set!", set_func);   // alias
 	builtins = insert_builtin(builtins, "unset", unset_func);
+	builtins = insert_builtin(builtins, "unsetenv", unset_func); // alias
+	builtins = insert_builtin(builtins, "unset!", unset_func);   // alias
 }
 
 int scripting(int i) {

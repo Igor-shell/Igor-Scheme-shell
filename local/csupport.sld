@@ -44,6 +44,9 @@
 
 	acons
 	abort
+
+	file-status
+
 	list-ref
 	list-set!
 	list-set-car!

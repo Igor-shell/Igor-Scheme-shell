@@ -22,6 +22,45 @@
 (define (in-range v mn mx)
   (and (<= mn v) (<= v mx)))
 
+
+(define (file-status file . selector)
+  (if (null? selector) (set! selector '(name ino mode nlink uid gid size mtime ctime atime blksize blocks dev rdev)))
+
+  (let* ((fs (file-stat file))
+		  (dev (get-stat-dev fs)) ;;/* ID of device containing file */
+		  (ino (get-stat-ino fs)) ;;/* inode number */
+		  (mode (get-stat-mode fs)) ;;/* protection */
+		  (nlink (get-stat-nlink fs)) ;;/* number of hard links */
+		  (uid (get-stat-uid fs)) ;;/* user ID of owner */
+		  (gid (get-stat-gid fs)) ;;/* group ID of owner */
+		  (rdev (get-stat-rdev fs)) ;;/* device ID (if special file) */
+		  (size (get-stat-size fs)) ;;/* total size, in bytes */
+		  (blksize (get-stat-blksize fs)) ;;/* blocksize for file system I/O */
+		  (blocks (get-stat-blocks fs)) ;;/* number of 512B blocks allocated */
+		  (atime (get-stat-atime fs)) ;;/* time of last access */
+		  (mtime (get-stat-mtime fs)) ;;/* time of last modification */
+		  (ctime (get-stat-ctime fs)) ;;/* time of last status change */
+		  )
+	 (let ((result '()))
+		(if (member 'name selector) (append result (list file)))
+		(if (member 'ino selector) (append result (list ino)))
+		(if (member 'mode selector) (append result (list mode)))
+		(if (member 'nlink selector) (append result (list nlink)))
+		(if (member 'uid selector) (append result (list uid)))
+		(if (member 'gid selector) (append result (list gid)))
+		(if (member 'size selector) (append result (list size)))
+		(if (member 'mtime selector) (append result (list mtime)))
+		(if (member 'ctime selector) (append result (list ctime)))
+		(if (member 'atime selector) (append result (list atime)))
+		(if (member 'blksize selector) (append result (list blksize)))
+		(if (member 'blocks selector) (append result (list blocks)))
+		(if (member 'dev selector) (append result (list dev)))
+		(if (member 'rdev selector) (append result (list rdev)))
+		result)
+	 )
+)
+		
+
 (define list-ref
   (letrec ((%list-ref list-ref))
     (lambda (l i)
