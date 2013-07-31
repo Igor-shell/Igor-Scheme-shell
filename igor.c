@@ -1314,23 +1314,47 @@ char **tokenise_cmdline(char *cmdline) {
 
 char *handle_filename(char *s) {
 	wordexp_t arg;
-	char * t;
+	char *t = NULL;
+	int n;
 
-	wordexp(s, &arg, 0);
+	fprintf(stderr,"handle_filename: %s\n",s);
 
-	if (arg.we_wordc <= 0) {
-		wordfree(&arg);
-		return NULL;
+	if (*s == '(') { // Kludge!
+		if (is_sexp(s)) {
+			fprintf(stderr,"1\n");
+			t = evaluate_scheme_expression(s);
+		}
+		else {
+			fprintf(stderr,"2\n");
+			t = strdup(s);
+		}
 	}
-	else if (arg.we_wordc > 1) {
-		int i;
-		fprintf(stderr,"Multiple filenames in redirection!: %s", arg.we_wordv[0]);
-		for (i = 1; i < arg.we_wordc; i++) fprintf(stderr,", %s", arg.we_wordv[i]);
-		fprintf(stderr,"\n");
-	}
+	else {
+		n = wordexp(s, &arg, 0);
+		
+		if (n != 0) {
+			fprintf(stderr,"3\n");
+			t = strdup(s);
+		}
+		else {
+			if (arg.we_wordc <= 0) {
+				wordfree(&arg);
+				return NULL;
+			}
+			else if (arg.we_wordc > 1) {
+				int i;
+				fprintf(stderr,"Multiple filenames in redirection!: %s", arg.we_wordv[0]);
+				for (i = 1; i < arg.we_wordc; i++) fprintf(stderr,", %s", arg.we_wordv[i]);
+				fprintf(stderr,"\n");
+			}
 
-	t = strdup(arg.we_wordv[0]);
-	wordfree(&arg);
+			else {
+				fprintf(stderr,"4\n");
+				t = strdup(arg.we_wordv[0]);
+				wordfree(&arg);
+			}
+		}
+	}
 	return t;
 }
 
