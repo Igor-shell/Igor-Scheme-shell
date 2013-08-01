@@ -475,7 +475,8 @@ void set_prompt_continuation(char *buffer) {
 }
 
 void free_prompt_continuation() {
-	sexp_eval_string(ctx, "", -1, ENV);
+	//sexp_eval_string(ctx, "", -1, ENV);
+	igor_set(ctx, "*igor-prompt-for-continuation-string*", "");
 }
 
 char *read_line(FILE *f, char *prompt_function) {
@@ -878,7 +879,7 @@ char *evaluate_scheme_expression(char *Sexpr) {
 		
 			else asprintf(&rstr,"Failed to evaluate [%s]\n", sexpr);
 		}
-		Dprintf(stderr,"[%s]\n", rstr);
+		Dprintf("[%s]\n", rstr);
 		Free(wsexpr);
 		Free(psexpr);
 		Free(sexpr);
@@ -984,7 +985,7 @@ char *jump_sexp(char *s, char escape) {
 	else if (*s == '{') expecting = '}';
 
 	for (s++; *s && *s != expecting;) {
-		if (*s == escape) {
+		if (escape && *s == escape) {
 			s+=2;
 			if (!*s) return s;
 		}
@@ -1691,13 +1692,21 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				return C;
 			}
 		}
-		
 		else {
 			char **tmp; 
 			C->argv[C->argc++] = Argv[i];
 			C->argv[C->argc] = 0;
 			tmp = word_expansion(C->argv, &(C->argc), C->argc-1);
 			if (tmp) C->argv = tmp;
+		}
+
+		// if the first thing in the list is an s-expression and the *next thing in the list is an s-expression
+		if (is_sexp(C->argv[0]) && C->argc == 1 && Argv[i] && is_sexp(Argv[i])) { 
+			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+			i++; // We *do not* increment here, because i already points to the right spot
+			C->argv[C->argc+1] = 0;
+			C->next = process_token_list(Argv + i, in, out, err);
+			return C;
 		}
 
 		if (0) {
@@ -2466,11 +2475,102 @@ int source_func(char **argv, int in, int out, int err, int shut_output, int shut
 
 
 int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_error) {
+#if 0
+	char *cmd = *argv;
+	char **ss;
+	fprintf(stderr,"scheme %s [", cmd);
+	for (ss = argv; *ss; ss++) {
+		if (ss == argv) fprintf(stderr,"%s", *ss);
+		else  fprintf(stderr,", %s", *ss);
+	}
+	fprintf(stderr,"] ");
+	
+	fprintf(stderr,"<%d,%d> &%d", in, out, err);
+//	fprintf(stderr, " %s\n", (in_the_background ? "&" : ""));
+	return 0;
+#endif
+
+	// Need to collect *all* the arguments  and process them as input....
+	int k;
+	char *p, *q, *s, *t;
+	char *sline = NULL;
+	char **Sexp = NULL;
+
+	k = 0;
+	
+	if (!argv || !argv[0] || !*argv[0]) {
+		return -1;
+	}
+	
+	sline = strdup("");
+
+	// Stick all the s-expressions in one spot
+	for (Sexp = argv; *Sexp; Sexp++) {
+		k += strlen(*Sexp);
+		sline = (char *)realloc(sline, (strlen(sline) + strlen(*Sexp) + k + 3) * sizeof(char));
+		
+		if (Sexp != argv) strcat(sline, " "); // insert a space if it isn't the first one
+		strcat(sline,*Sexp);
+	}
+
+	// over all the arguments, 
+	k = 0;
+	for (s = sline; *s; ) {
+		t = jump_sexp(s,0);
+		if (t == s && *t) {
+			// Parsing problem
+
+			fprintf(stderr,"igor: Error parsing s-expression: %s\n", s);
+			Free(sline);
+			return -1;
+		}
+
+		p = (char *)malloc(t - s + 2);
+		strncpy(p, s, t-s);
+		p[t-s] = 0;
+
+		s = t;
+
+		if (!strcmp(p,"()")) {
+		// empty function application -- there really ought to be something good we could do...
+			evaluate_scheme_expression("#t"); // Sets the ERRCON state appropriately
+			q = strdup("()"); // 
+		}
+		else {
+			q = evaluate_scheme_expression(p);
+		}
+		
+		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
+			if (q && *q) {
+				write(out,q,strlen(q));
+				k++;
+			}
+			Free(q);
+		}
+		else if (sexp_exceptionp(ERRCON)) {
+			fprintf(stderr,"Exception raised by %s\n", p);
+			ERRCON = SEXP_TRUE;
+		}
+		Free(p);
+	}
+
+	if (k > 0) write(out, "\n", 1);
+
+	Free(sline);
+
+	if (shut_output) close(out);
+	if (shut_error) close(err);
+
+	return 0;
+}
+
+
+int scm1_func(char **argv, int in, int out, int err, int shut_output, int shut_error) {
 	// This is wrong, really.  It ought to be incorporated in the structure sent to run_commands
 	int r = 0;
 
 	
-#if 0
+#if 1
 	char *cmd = *argv;
 	char **ss;
 	fprintf(stderr,"scheme %s [", cmd);
