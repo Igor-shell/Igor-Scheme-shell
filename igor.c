@@ -138,6 +138,7 @@ char *supporting_initialisation[] = {
 	"(define *igor-history-file*  #f)",
 	"(define *igor-version*  \'(igor 0 1 \"dogfoodable\"))",
 	"(define *running-script* 0)",
+	"(define *last_igor_eval* \"\")",
 
 
 	// Functions
@@ -164,6 +165,7 @@ char *supporting_initialisation[] = {
 
 int running_script = 0;
 int track_execv = 0;
+int repl_write = -1; // by default doesn't print things
 
 int SEXP_OK_IN_DQUOTES = 1;
 int SEXP_OK_IN_BQUOTES = 1;
@@ -420,7 +422,9 @@ sexp argv_to_list(sexp ctx, char **argv, int n) {
 	return lst;
 }
 
-
+sexp sexp_current_output_port(sexp ctx) {
+	return sexp_eval_string(ctx,"(current-output-port)", -1, env);
+}
 
 char *guard_definitions(char *s) {
 	char *p, *r;
@@ -439,9 +443,11 @@ char *guard_definitions(char *s) {
 void igor_set(sexp ctx, char *variable, char *value) {
 	char *p;
 	char *fmt = "(set! %s  %s)";
+	
 	p = (char *)malloc((strlen(fmt) + strlen(variable) + strlen(value) + 2) * sizeof(char));
 	sprintf(p, fmt, variable, value);
 	sexp_eval_string(ctx,p,-1,env);
+	setenv(variable, value, 1);
 	free(p);
 }
 
@@ -533,7 +539,7 @@ char *read_line(FILE *f, char *prompt_function) {
 #endif
 
 		if (!f) {
-			Free(history_file);
+			Free(history_file);			
 			history_file = evaluate_scheme_expression("*igor-history-file*");
 			if (!history_file || !strcmp(history_file,"#f")) {
 				Free(history_file);
@@ -650,7 +656,10 @@ sexp check_exception (sexp ctx, sexp res, char *message, char *subject) { // fro
 	sexp_gc_var1(err);
 	sexp_gc_preserve1(ctx,err);
   
+	ERRCON = res;
+
 	if (res && sexp_exceptionp(res)) {
+
 		err = sexp_current_error_port(ctx);
 		if (! sexp_oportp(err))
 			err = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
@@ -672,6 +681,20 @@ sexp check_exception (sexp ctx, sexp res, char *message, char *subject) { // fro
   return res;
 }
 
+void write_sexp(sexp ctx, sexp bit, int err) {
+	sexp_gc_var1(out);
+	sexp_gc_preserve1(ctx,out);
+	
+	if (err) out = sexp_current_error_port(ctx);
+	else out = sexp_current_output_port(ctx);
+
+	if (! sexp_oportp(out))	{
+		if (err) out = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
+		else out = sexp_make_output_port(ctx, stdout, SEXP_FALSE);
+	}
+	sexp_write(ctx, bit, out);
+	sexp_newline(ctx,out);
+}
 
 char protect_char(int maskit, char c) {
 	char *domain = "()";
@@ -863,7 +886,8 @@ char *evaluate_scheme_expression(char *Sexpr) {
 		sexpr = guard_definitions(((run_word_expand && psexpr) ? psexpr : Sexpr));
 
 		asprintf(&wsexpr, "(let ((output (open-output-string)) (rslt #f))" 
-			"  (display %s output)"
+			"  (set! *last_igor_eval* %s)"
+			"  (display *last_igor_eval* output)"
 			"  (set! rslt (get-output-string output))"
 			"  (close-output-port output) rslt)", sexpr);
 
@@ -877,7 +901,10 @@ char *evaluate_scheme_expression(char *Sexpr) {
 			}
 			else if (sexp_stringp(result)) rstr = strdup(sexp_string_data(result));
 		
-			else asprintf(&rstr,"Failed to evaluate [%s]\n", sexpr);
+			else {
+				asprintf(&rstr,"Failed to evaluate [%s]", sexpr);
+			}
+			
 		}
 		Dprintf("[%s]\n", rstr);
 		Free(wsexpr);
@@ -2341,6 +2368,19 @@ int set_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	return 0;
 }
 
+int repl_output(char **argv, int in, int out, int err, int shuto, int shute) {
+	char *value = argv[1];
+	if (!value || !*value) repl_write = -1;
+	else if (!strcmp(value, "none")) repl_write = -1;
+	else if (!strcmp(value, "quiet")) repl_write = -1;
+	else if (!strcmp(value, "stdout")) repl_write = 0;
+	else if (!strcmp(value, "stderr")) repl_write = 1;
+
+	setenv("REPL_WRITE", "-1", repl_write);
+	return repl_write;
+}
+
+
 int unset_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	int i;
 	char *cmd = 0;
@@ -2495,6 +2535,8 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 	char *p, *q, *s, *t;
 	char *sline = NULL;
 	char **Sexp = NULL;
+	sexp_gc_var1(result);
+	sexp_gc_preserve1(ctx, result);
 
 	k = 0;
 	
@@ -2540,6 +2582,8 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 			q = evaluate_scheme_expression(p);
 		}
 		
+		result = sexp_eval_string(ctx,"*last_igor_eval*",-1,NULL);
+
 		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
 			if (q && *q) {
 				write(out,q,strlen(q));
@@ -2554,6 +2598,13 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 		Free(p);
 	}
 
+	if (result != SEXP_UNDEF && result != SEXP_VOID && !sexp_exceptionp(result)) {
+		if (repl_write >= 0) {
+			write_sexp(ctx, result, repl_write);
+			k++;
+		}
+	}
+
 	if (k > 0) write(out, "\n", 1);
 
 	Free(sline);
@@ -2561,6 +2612,7 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 	if (shut_output) close(out);
 	if (shut_error) close(err);
 
+	sexp_gc_release1(ctx);
 	return 0;
 }
 
@@ -2708,6 +2760,7 @@ void install_builtins() {
 	builtins = insert_builtin(builtins, "exec", exec_func);
 	builtins = insert_builtin(builtins, "source", source_func);
 	builtins = insert_builtin(builtins, ".", source_func); // alias
+	builtins = insert_builtin(builtins, "repl_output", repl_output);
 	builtins = insert_builtin(builtins, "scm", scm_func);
 	builtins = insert_builtin(builtins, "exit", exit_func);
 	builtins = insert_builtin(builtins, "cd", cd_func);
@@ -2851,6 +2904,7 @@ int main(int argc, char **argv) {
   sexp_load_standard_env(ctx, NULL, SEXP_SEVEN);
   sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 0);
 
+  sexp_intern(ctx,"*igor-history-file*", -1);
   sexp_intern(ctx,"*igor-input-source-port*", -1);
   sexp_intern(ctx,"*igor-output-capture-port*", -1);
   sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
