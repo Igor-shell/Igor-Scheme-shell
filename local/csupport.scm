@@ -163,7 +163,23 @@
 			 (strtok (list->string (reverse lst)) " \t\n")
 			 (loop (cons c lst) (read-char))))
 	 )
-  (filter (lambda (x) (> (string-length x) 0)) (*read-all*)))
+  (let ((rtn (filter (lambda (x) (> (string-length x) 0)) (*read-all*))))
+	 ;;(close-port (current-output-port))
+	 rtn
+	 ))
+  
+
+(define (prune-quotes x)
+			(let ((xl (string->list x)))
+			  (if (and (> (length xl) 2)
+						  (char=? (car xl) #\")
+						  (char=? (car (reverse xl))) #\")
+					(substring x 1 (- (string-length x) 1))
+					x)))
+
+(define (prune-quotes-in-list x)
+    (map prune-quotes x))
+					
   
 (define pipe-input read-all)
 

@@ -30,7 +30,9 @@
 	*igor-builtin-list*
 
 	;; functions
-	andf orf ++ -- read-all read-all-lines in-range pipe-input show 
+	andf orf ++ -- read-all read-all-lines 
+	prune-quotes prune-quotes-in-list
+	in-range pipe-input show 
 	string-index list-head denull denull-and-flatten level depth 
 	strspn strcspn
 	collapsing-strtok strtok reconstruct-string 

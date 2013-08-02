@@ -193,6 +193,7 @@ int serial_number = 1;
 char *start_fence = "(";
 char *end_fence = ")";
 
+char sescape = 0;
 char escape = '\\';
 
 char squote = '\'';
@@ -1143,6 +1144,7 @@ char **tokenise_cmdline(char *cmdline) {
 	char *collecting = NULL;
 	int i = 0;
 	int CSIZE = 0;
+	int hit_comment = 0;
 
 
 	if (!cmdline || !*cmdline) {
@@ -1172,7 +1174,10 @@ char **tokenise_cmdline(char *cmdline) {
 		}
 		else Dprintf("  no argv\n");
 
-		if (cp && (*cp == '\n' || *cp == '\r')) cp++;
+		if (cp && (*cp == '\n' || *cp == '\r')) {
+			hit_comment = 0;
+			cp++;
+		}
 
 		if (!cp || !*cp) { // either there is nothing there, or we have reached the end of the cmdline
 			if (i > 0) { // we are still collecting a string, so
@@ -1213,7 +1218,7 @@ char **tokenise_cmdline(char *cmdline) {
 		}
 
 		else if (!strncmp(cp, quotedlist, strlen(quotedlist)) || !strncmp(cp, shellcmd, strlen(shellcmd))) { // this is a quoted list or "special" scheme expression
-			char *tcp = jump_sexp(cp+1, escape);
+			char *tcp = jump_sexp(cp+1, sescape);
 			int n = collecting?strlen(collecting):1;
 
 			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)realloc(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
@@ -1250,7 +1255,7 @@ char **tokenise_cmdline(char *cmdline) {
 
 		else if (strchr(start_fence, *cp)) { /* This is a straight s-expression  */
 			// make sure we start a new argv here
-			char *tcp = jump_sexp(cp, escape);
+			char *tcp = jump_sexp(cp, sescape); 
 			int n = collecting?strlen(collecting):1;
 
 			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)realloc(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
@@ -1306,7 +1311,7 @@ char **tokenise_cmdline(char *cmdline) {
 
 					ssch = cp;
 					abort();
-					cp = jump_sexp(cp,escape); 
+					cp = jump_sexp(cp,sescape);
 					if (ssch == cp) {
 						abort();
 					}
@@ -1320,6 +1325,10 @@ char **tokenise_cmdline(char *cmdline) {
 						i = 0;
 					}
 
+				}
+				else if ((!strncmp(cp,"#",1) && strncmp(cp,"#\\",2) && strncmp(cp,"#:",2)) || !strncmp(cp,";;",2)) {
+					// This is a comment
+					*cp = 0;
 				}
 
 				else {
@@ -2057,17 +2066,6 @@ char *get_commandline(FILE *f, char *buffer) {
 		cl = read_line(f, prompt);
 		if (cl) cln = strlen(cl);
 		
-		/****** NOT WORKING ******/
-		if (0) {
-			char *fnsc = NULL;
-			fnsc = first_non_space_char(cl);
-
-			if (*fnsc == ';' || *fnsc == '#') {
-			// treat line as a comment
-				continue;
-			}
-		}
-
 		if (cln > 1 && cl[cln-1] == '\\' && cl[cln-2] != '\\') {
 			prompt = contprompt;
 		}
