@@ -28,12 +28,27 @@
 
 */
 
+#define IGOR_VERSION "(igor 0 1 \"dogfoodable\")"
+#define IGOR_REPO "https://github.com/Igor-shell/Igor-Scheme-shell"
+
+
 #define USES_CHIBI
 //#define USES_GAMBIT
 //#define USES_GUILE
 
-//#define Dprintf(format, args...) printf(format, ##args)
-//#define DPTprintf(format, args...) printf(format, ##args)
+
+//#define Cprintf(format, args...) printf(format, ##args) // execution in command-loop
+//#define Iprintf(format, args...) printf(format, ##args) // execution path from the arguments supplied to igor
+//#define Dprintf(format, args...) printf(format, ##args) // debugging the tokenising
+//#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
+
+#if !defined(Cprintf)
+#define Cprintf(format, args ...)
+#endif
+
+#if !defined(Iprintf)
+#define Iprintf(format, args ...)
+#endif
 
 #if !defined(Dprintf)
 #define Dprintf(format, args ...)
@@ -136,7 +151,7 @@ char *supporting_initialisation[] = {
 
 	"(define *igor-prompt-for-continuation-string* \"\")",
 	"(define *igor-history-file*  #f)",
-	"(define *igor-version*  \'(igor 0 1 \"dogfoodable\"))",
+	"(define *igor-version*  \'" IGOR_VERSION ")",
 	"(define *running-script* 0)",
 	"(define *last_igor_eval* \"\")",
 
@@ -2185,11 +2200,19 @@ void command_loop(FILE *f) {
 	cmd_t *C = NULL;
 	char **argv;
 	int i;
+	int line_num = 0;
 
 	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
 
 	while((cmd = get_commandline(f,NULL))) {
+		if (!line_num && !strncmp(cmd, "#!", 2)) {
+			Cprintf("Passing over the magic number\n");
+			continue;
+		}
+		line_num++;
+
+		Cprintf("about to run the command [%s]\n", cmd);
 		umask((mode_t)(S_IWGRP|S_IWOTH));
 		if (!f && !running_script) { // reset the file descriptors
 			dup2(IN, 0);
@@ -2315,6 +2338,7 @@ int exit_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	int i;
 	char *message = "\nBad argument to exit: %s\n";
 	
+	Cprintf("exit_func\n");
 	close_up_shop();
 
 	if (argv == NULL || *argv == NULL || **argv == 0)	exit(0);
@@ -2332,6 +2356,7 @@ int exit_func(char **argv, int in, int out, int err, int shuto, int shute) {
 }
 
 int set_func(char **argv, int in, int out, int err, int shuto, int shute) {
+	Cprintf("set_func\n");
 	if (argv[1]) {
 		char *cmd;
 		int i;
@@ -2370,6 +2395,7 @@ int set_func(char **argv, int in, int out, int err, int shuto, int shute) {
 
 int repl_output(char **argv, int in, int out, int err, int shuto, int shute) {
 	char *value = argv[1];
+	Cprintf("repl_output\n");
 	if (!value || !*value) repl_write = -1;
 	else if (!strcmp(value, "none")) repl_write = -1;
 	else if (!strcmp(value, "quiet")) repl_write = -1;
@@ -2384,6 +2410,7 @@ int repl_output(char **argv, int in, int out, int err, int shuto, int shute) {
 int unset_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	int i;
 	char *cmd = 0;
+	Cprintf("unset_func\n");
 	for (i = 1; argv[i]; i++) {
 		unsetenv(argv[i]);
 		asprintf(&cmd, "(define %s '())", argv[i]);
@@ -2394,6 +2421,7 @@ int unset_func(char **argv, int in, int out, int err, int shuto, int shute) {
 }
 
 int exec_func(char **argv, int in, int out, int err, int shuto, int shute) {
+	Cprintf("exec_func\n");
 	argv = argv+1;
 	if (argv == NULL || *argv == NULL || **argv == 0)	exit(0);
 	if (execvp(*argv, argv)) {
@@ -2407,6 +2435,8 @@ int exec_func(char **argv, int in, int out, int err, int shuto, int shute) {
 int cd_func(char **argv, int in, int out, int err, int shuto, int shute) {
 	/*** change this so it can be replaced by a scheme routine ***/
 	int i;
+
+ 	Cprintf("cd_func\n");
 
 	for (i = 1; argv[i]; i++) {
 		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
@@ -2783,6 +2813,12 @@ int scripting(int i) {
 
 
 int igor(int argc, char **argv) {
+	int i = 1;
+	int run_interactive_shell = 1;
+	int run_rc = 1;
+	int run_builtins = 1;
+	int just_exit = 0;
+
 	add_magic(quotedlist);
 	add_magic(heredoc);
 	add_magic(andsep);
@@ -2811,10 +2847,6 @@ int igor(int argc, char **argv) {
 	add_magic(scmunquote);
 
 
-	install_builtins();
-
-	load_igor_rc(NULL); // first from /etc/igor.rc then ~/.igor.rc
-
    /* check if this is an interactive shell */
 	if (isatty(0) && isatty(1)) {
 		signal(SIGINT, SIG_IGN);
@@ -2824,51 +2856,88 @@ int igor(int argc, char **argv) {
 	}
 #define MAX_CMD 2048
 
-// Doesn't do arguments to scripts yet
+	// set the array that the function "command-line" returns as the list of the arguments here
 
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i],"--no-builtins")) run_builtins = 0;
+		else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--no-rc")) run_rc = 0;
+		else if (!strcmp(argv[i],"-h") || !strcmp(argv[i],"--help")) {
+
+		}
+		else if (!strcmp(argv[i],"-V") || !strcmp(argv[i],"--verbose-version")) {
+			printf("Igor, the lithping thell (with thanks to Terry Pratchett)\n");
+			printf("For more information and source code visit\n   %s\n",IGOR_REPO);
+			printf("version list: %s\n",IGOR_VERSION);
+		}
+		else if (!strcmp(argv[i],"-v") || !strcmp(argv[i],"--version")) fprintf(stdout,"%s\n",IGOR_VERSION);
+	}
+
+	if (just_exit) exit(0);
+	if (run_builtins) install_builtins();
+	if (run_rc) load_igor_rc(NULL); // first from /etc/igor.rc then ~/.igor.rc
+	
+	
+	for (i = 1; i < argc; i++) {
+		
    /* exec a command if -c */
-	if (argv[ 1 ] != NULL) {
-		if (strcmp(argv[ 1 ], "-c") == 0) {
-			int k = 0, col = 0;
-			char *cmds = 0;
+		if (argv[ 1 ] != NULL) {
+			if (strcmp(argv[ 1 ], "-c") == 0) {
+				int k = 0;
+				char *cmds = 0;
 
-			history_file = NULL; // we don't want to add script things to the history
+				Iprintf("Processing -c\n");
 
-			int i = 0;
-			for (i = 2; i < argc; i++) k += strlen(argv[i]) + 2;
-			cmds = (char*)calloc(k,1);
+				run_interactive_shell = 0;
+				Free(history_file);
+				history_file = NULL; // we don't want to add script things to the history
 
-			for (i=2,col=0; i < argc; i++) {
+				int i = 0;
+				for (i = 2; i < argc; i++) k += strlen(argv[i]) + 2;
+				cmds = (char*)calloc(k,1);
+
+				for (i = 2; i < argc; i++) {
+					strcat(cmds, argv[i]);
+					if (i+1 < argc) strcat(cmds, " ");
+				}
+				Iprintf("About to execute [%s]\n", cmds);
+				i = execute_command_string(cmds);
+				exit(i);
+			}
+
+			else if (strcmp(argv[ 1 ], "--") == 0) { // This is a shell command
+				Iprintf("Processing --\n");
+
+				run_interactive_shell = 0;
+
+				Free(history_file);
+				history_file = NULL; // we don't want to add script things to the history
 				
-				strncpy(&cmds[col], argv[i], MAX_CMD - col);
-				col += strlen(argv[i]);
-				cmds[col++] = ' ';
+				Iprintf("running [%s]\n", argv[2]);
+				return run_source_file(argv[2]);
 			}
+			else if (strcmp(argv[ 1 ], "-e") == 0) { // This is a shell command
+				Iprintf("Processing -e\n");
 
-			exit(execute_command_string(cmds));
-		}
-		else if (strcmp(argv[ 1 ], "--") == 0) { // This is a shell command
-			Free(history_file);
-			history_file = NULL; // we don't want to add script things to the history
+				run_interactive_shell = 0;
 
-			return run_source_file(argv[2]);
-		}
-		else if (strcmp(argv[ 1 ], "-e") == 0) { // This is a shell command
-			Free(history_file);
-			history_file = NULL; // we don't want to add script things to the history
+				Free(history_file);
+				history_file = NULL; // we don't want to add script things to the history
 
-			FILE *f = fopen(argv[2],"r");
-			if (f) {
-				scripting(1);
-				command_loop(f);
-				fclose(f);
-				return 0;
+				Iprintf("opening [%s]\n", argv[2]);
+				FILE *f = fopen(argv[2],"r");
+				if (f) {
+					scripting(1);
+					command_loop(f);
+					fclose(f);
+					return 0;
+				}
+				fprintf(stderr,"Cannot open '%s': %s\n", argv[2], strerror(errno));
+				return 1;
 			}
-			fprintf(stderr,"Cannot open '%s': %s\n", argv[2], strerror(errno));
-			return 1;
 		}
 	}
-	else {
+	if (run_interactive_shell) {
+		Iprintf("Running interactive shell\n");
 		Free(history_file);
 		history_file = evaluate_scheme_expression("*igor-history-file*");
 
@@ -2886,7 +2955,6 @@ int igor(int argc, char **argv) {
 int main(int argc, char **argv) {
   int code = 0;
   char **ss;
-  char *s;
   sexp res;
 
   // These are the stdin, stdout and stderr on entry
