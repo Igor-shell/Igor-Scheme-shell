@@ -1,0 +1,120 @@
+From 2076ecfb476eda513b8605bc3d89c66284369275 Mon Sep 17 00:00:00 2001
+From: Alex Shinn <alexshinn@gmail.com>
+Date: Tue, 30 Jul 2013 21:38:15 +0900
+Subject: [PATCH] Adding build support for OS X.   - Using getpwuid instead of
+ getpwd.   - Making soname suffix a variable.   - Printing load exceptions on
+ startup.
+
+---
+ igor.c         | 17 +++++++++--------
+ local/makefile |  7 ++++---
+ makefile       | 13 ++++++++-----
+ 3 files changed, 21 insertions(+), 16 deletions(-)
+
+diff --git a/igor.c b/igor.c
+index 6b069fb..3423fd2 100644
+--- a/igor.c
++++ b/igor.c
+@@ -2163,18 +2163,15 @@ int load_igor_rc(char *urc) {
+ 	static char *igoretcrc = "/etc/igor.rc";
+ 	const int use_load = 1;
+ 	char userrc[512];
+-	char pwen[512];
++	const struct passwd* pwen;
+ 	int id = getuid();
+-	char *hdir;
++	const char *hdir;
+ 	
+ 	sexp_gc_var2(fname,rtn);
+ 	sexp_gc_preserve2(ctx, fname,rtn);
+ 	
+-	getpw(id, pwen);
+-	hdir = strrchr(pwen,':');
+-	*hdir = 0;
+-	hdir = strrchr(pwen,':');
+-	hdir++;
++	pwen = getpwuid(id);
++	hdir = pwen ? pwen->pw_dir : "/";
+ 
+ 	if (access(igoretcrc, R_OK) == Ok) { 
+ 		fname = sexp_c_string(ctx, igoretcrc, -1);
+@@ -2637,6 +2634,7 @@ int main(int argc, char **argv) {
+   int code = 0;
+   char **ss;
+   char *s;
++  sexp res;
+ 
+   // These are the stdin, stdout and stderr on entry
+   IN = dup(0); 
+@@ -2658,7 +2656,10 @@ int main(int argc, char **argv) {
+   sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
+   sexp_intern(ctx,"*igor-swap-output-capture-port*", -1);
+ 
+-  for (ss = supporting_initialisation; ss && *ss; ss++)  sexp_eval_string(ctx,*ss, -1, env);
++  for (ss = supporting_initialisation; ss && *ss; ss++) {
++    res = sexp_eval_string(ctx,*ss, -1, env);
++    if (sexp_exceptionp(res)) sexp_print_exception(ctx, res, SEXP_FALSE);
++  }
+ 
+ 
+ #if defined(extra_load_file)
+diff --git a/local/makefile b/local/makefile
+index d568ac2..930a50e 100644
+--- a/local/makefile
++++ b/local/makefile
+@@ -20,11 +20,12 @@ CXXFLAGS = -g
+ 
+ OBJS =
+ SRCS = $(OBJS:.o=.c)
++SO ?= so
+ 
+-csupport.so: csupport.stub external-support.c
++csupport.$(SO): csupport.stub external-support.c
+ 	chibi-ffi csupport.stub
+-	gcc -fPIC -shared csupport.c -o csupport.so -lchibi-scheme
++	gcc -fPIC -shared csupport.c -o csupport.$(SO) -lchibi-scheme
+ 
+ 
+ clean:
+-	rm -f csupport.c csupport.so
++	rm -f csupport.c csupport.$(SO)
+diff --git a/makefile b/makefile
+index 1fa0f7b..ed19a8f 100644
+--- a/makefile
++++ b/makefile
+@@ -21,11 +21,14 @@ CXXFLAGS = -g
+ OBJS =
+ SRCS = $(OBJS:.o=.c)
+ 
++# "make SO=dylib" for OS X
++# TODO: use auto-detection from chibi's Makefile
++SO ?= so
+ 
+ 
+ 
+-igor: igor.c local/csupport.sld local/csupport.so
+-	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -L/usr/local/lib -lreadline -lhistory -lchibi-scheme
++igor: igor.c local/csupport.sld local/csupport.$(SO)
++	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
+ 	chmod a+rx igor
+ 
+ install:
+@@ -38,12 +41,12 @@ install-links:
+ 	echo ... for me it is 
+ 	echo '    ln -s ~/igor/local /usr/local/lib64/chibi/'
+ 
+-local: igor.c local/csupport.sld local/csupport.so
++local: igor.c local/csupport.sld local/csupport.$(SO)
+ 	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -L/usr/local/lib -lreadline -lhistory -lchibi-scheme
+ 	chmod a+rx igor
+ 
+-local/csupport.so: local/external-support.c local/csupport.sld local/csupport.stub
+-	make -C local clean csupport.so
++local/csupport.$(SO): local/external-support.c local/csupport.sld local/csupport.stub
++	make -C local clean csupport.$(SO)
+ 	make
+ 
+ clean:
+-- 
+1.8.3.4
+
