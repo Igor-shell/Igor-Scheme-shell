@@ -1,5 +1,16 @@
 
 (define-library (local csupport)
+  (import (scheme base))
+  (import (scheme read))
+  (import (scheme write))
+  (import (chibi system))
+  (import (chibi process))
+  (import (chibi filesystem))
+  (import (srfi 1))
+  (import (srfi 33))
+  (import (srfi 95))
+  (import (srfi 98))
+  
   (export 
 ;  term-read history-add history-set-max-length history-save 
 ;  history-load read-from-terminal set-multiline-term-read
@@ -60,13 +71,23 @@
 	tokenise-string
 
 	*add-builtin*
-	*igor-execute-builtin-process*
-	*igor-execute-single-process*
+	;;	*igor-execute-builtin-process*
+	;;	*igor-execute-single-process*
 
 	system call cd 
+
+	igor-read-line
+	igor-get-command-line
+
+	;; esc
+	;; igor-symbol-alist
+	;; paren-fence-alist
+	;; bracket-fence-alist
+	;; brace-fence-alist
+	;; quote-fence-alist
+	;; igor-token-list
 	)
 
-  (import (chibi) (chibi filesystem))
   (include-shared "csupport")
   (include "csupport.scm")
   )
