@@ -68,21 +68,27 @@
 #define IGOR_REPO "https://github.com/Igor-shell/Igor-Scheme-shell"
 
 
+
 #define USES_CHIBI
 //#define USES_GAMBIT
 //#define USES_GUILE
 
 #define NewEvaluateSchemeExpression // comment out for the old version
 
-
-//#define reallocate(p,s) realloc(p, s)
-#define reallocate(p,s) ({void *q = NULL; fprintf(stderr,"REALLOC %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q =  realloc(p, s); fprintf(stderr,"REALLOCATED %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q;})
-
-
+//#define REALLOCS_ARE_REVOLTING
 
 //#define Cprintf(format, args...) printf(format, ##args) // execution in command-loop
 //#define Iprintf(format, args...) printf(format, ##args) // execution path from the arguments supplied to igor
 //#define Dprintf(format, args...) printf(format, ##args) // debugging the tokenising
+
+
+#if defined(REALLOCS_ARE_REVOLTING)
+#define reallocate(p,s) ({void *q = NULL; fprintf(stderr,"REALLOC %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q =  realloc(p, s); fprintf(stderr,"REALLOCATED %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q;})
+#else
+#define reallocate(p,s) realloc(p, s)
+#endif
+
+
 #define DPTprintf(format, args...) printf(format, ##args) // processing tokens
 
 #if !defined(Cprintf)
