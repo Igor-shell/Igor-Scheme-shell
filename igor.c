@@ -1616,57 +1616,39 @@ char *handle_filename(char *s) {
 	return t;
 }
 
-char **word_expansion(char **argv, int *argc, int argix) {
+#define omit_unmatched_wildcards 1
+
+// returns NULL if there is no expansion, else it returns a null terminated array of strings
+char **word_expansion(char *av, int *argc) {
+	char **argv;
 	wordexp_t arg;
 	int n;
 	int err = 0;
 
-	if (!argv || argix >= *argc || !argv[argix] || !*argv[argix]) return argv;
 
-	err = wordexp(argv[argix], &arg, 0);
+	if (!av || !*av) return NULL;
 
-	if (err) return NULL;
+	err = wordexp(av, &arg, 0);
+	if (err) {
+		//wordfree(&arg); //Not needed
+		return NULL;
+	}
 
-	n = arg.we_wordc + *argc + 1;
+	if (arg.we_wordc == 0) abort();
 	
-	if (arg.we_wordc == 0) {
-		int j;
-		//char *s = argv[argix];
-		for (j = argix; j < *argc; j++) argv[j] = argv[j+1];
-		*argc = *argc-1;
-		//Free(s); // I hope this is ok! .. maybe not?
-	}
-	else if (arg.we_wordc == 1) {
-		int sn = strlen(arg.we_wordv[0]);
-		if (strlen(argv[argix]) < sn) argv[argix] = (char *)reallocate(argv[argix], (sn+2) * sizeof(char));
-		strcpy(argv[argix], arg.we_wordv[0]);
-	}
-	else {
-		int i;
-		argv = (char **)reallocate(argv,sizeof(char **) * (n+1));
-		for (i = *argc; i <= n; i++) argv[i] = 0;
-		if (!argv) abort();
+	argv = (char **)calloc(arg.we_wordc + 1, sizeof(char *));
+	for (n = 0; n < arg.we_wordc; n++) argv[n] = strdup(arg.we_wordv[n]);
+	argv[n] = NULL;
 
-		memmove(argv + argix + 1, argv + arg.we_wordc - 1, (*argc-argix)* sizeof(char *)); // ought to move the pointers appropriately
-		Free(argv[argix]);
+	*argc = arg.we_wordc + 1;
 
-		for (i = 0; i < arg.we_wordc; i++) {
-			
-			argv[i+argix] = strdup(arg.we_wordv[i]);
+	wordfree(&arg);  // wordfree frees the array and the strings in it.
 
-			//argv[i+argix] = (char *)reallocate(argv[i+argix], (strlen(arg.we_wordv[i])+1) * sizeof(char));
-			//strcpy(argv[i+argix], arg.we_wordv[i]);
-		}
-
-		*argc = *argc + arg.we_wordc - 1;
-	}
-		
-	wordfree(&arg);
 	return argv;
 }
 
 cmd_t *process_token_list(char **Argv, int in, int out,int err) {
-	int Argc;
+	int Argc = 0;
 	int i = 0;
 	cmd_t *C = new_cmd_t();
 	char *fname = NULL;
@@ -2038,13 +2020,33 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 			}
 		}
 		else {
-			char **tmp; 
+			char **tmp = NULL; 
+			int k = 0, wc = 0;
+
 //			DPTprintf("Assigning \"%s\" to C->argv[%d]\n", Argv[i], C->argc);
-			C->argv[C->argc++] = Argv[i];
-			C->argv[C->argc] = 0;
-			tmp = word_expansion(C->argv, &(C->argc), C->argc-1);
-			if (tmp) C->argv = tmp;
+			
+			if (!C) abort();
+			if (!C->argv) abort();
+
+			if (Argv[i]) {
+				tmp = word_expansion(Argv[i], &wc);
+
+				if (tmp &&& wc > 0) {
+					C->argv  = (char **)realloc(C->argv, (C->argc+1 + wc)*sizeof(char *));
+					
+					for (k = 0; tmp && tmp[k] && k < wc; k++) {
+						C->argv[C->argc++] = tmp[k];
+						C->argv[C->argc] = 0;
+					}
+					free(tmp); 
+				}
+				else {
+					C->argv[C->argc++] = Argv[i];
+					C->argv[C->argc] = 0;
+				}
+			}
 		}
+
 
 //		DPTprintf("{Argv[%d] = \"%s\"  &  ", i, Argv[i]);
 //		DPTprintf("C->argv[%d] = \"%s\"  is_sexp() = %d //  ", 0, C->argv[0], is_sexp(C->argv[0]));

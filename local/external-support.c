@@ -21,6 +21,11 @@
 //}
 
 
+sexp sexp_fd(sexp ctx, sexp ob) {
+	return sexp_make_integer(ctx, sexp_port_fileno(ob));
+}
+
+
 void delete_file_stat(struct stat *fs) {
 	if (fs) free(fs);
 }

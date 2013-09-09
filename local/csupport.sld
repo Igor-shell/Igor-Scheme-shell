@@ -18,6 +18,8 @@
 	;; c routines 
 	word-expand get-env set-env unset-env
 
+	sexp-fd
+
 	file-stat 
 	get-stat-dev set-stat-dev! get-stat-ino set-stat-ino!
 	get-stat-mode set-stat-mode! get-stat-nlink set-stat-nlink!

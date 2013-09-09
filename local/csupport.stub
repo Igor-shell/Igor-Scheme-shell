@@ -56,6 +56,8 @@
 (define-c int (set-env "setenv") (string string int))
 (define-c int (unset-env "unsetenv") (string))
 					  
+(define-c sexp (sexp-fd "sexp_fd") (sexp sexp))
+
 ;;(define-c sexp (argv-to-list "argv_to_list") (sexp (array string) int))
 
 ;;(define-c string (term-read "linenoise") ((const string)))
