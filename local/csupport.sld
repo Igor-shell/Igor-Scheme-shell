@@ -16,9 +16,9 @@
 ;  history-load read-from-terminal set-multiline-term-read
 	
 	;; c routines 
-	word-expand get-env set-env unset-env
+	word-expand-wrapper get-env set-env unset-env
 
-	sexp-fd
+	sexp-fd-val
 
 	file-stat 
 	get-stat-dev set-stat-dev! get-stat-ino set-stat-ino!
@@ -39,6 +39,7 @@
 	;;	quote-fence-list
 	;;	igor-token-list
 
+	word-expand
 	*igor-report-backgrounding*
 	*igor-builtin-list*
 

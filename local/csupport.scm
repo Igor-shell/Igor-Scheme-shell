@@ -384,6 +384,9 @@
 		  ""
 		  (substring str 1 (- n 1)))))
 
+(define tab (if #t (make-string 1 #\tab) #f)) ;;  controls whether tabs are treated like spaces on the cmd line
+
+
 ;;; (define igor-symbol-alist
 ;;;   '(
 ;;; 	 ("(" . start_fence)
@@ -462,6 +465,22 @@
 	;;; 							  ))
 
 
+;; This is a *hack* -- does not handle bad characters (like #\boink)
+(define (sexpr-jumper s)
+  (let ((is (open-input-string s))
+		  (os (open-output-string))
+		  )
+	 (let ((sexpr #f))
+		(let* ((sexpression (read is))
+				 (rest (read-line is (string-length s))))
+				
+		  (write sexpression os)
+		  (set! sexpr (get-output-string os))
+		  (close-port os)
+		  (close-port is)
+		  (list sexpr rest))
+		)))
+
 (define (fence-jumper str fence-pair . prune-palings)
   (call-with-current-continuation
 	(lambda (abort)
@@ -491,165 +510,164 @@
 			  (loop (string-append l (string-car r)) (string-cdr r)))))))
 	))
 
+;; assoc on the cdr
+(define (cossa key alist)
+  (let ((rev (lambda (x) (cons (cdr x) (car x)))))
+	 (let* ((tsila (map rev alist))
+			  (r (assoc key tsila))
+			  )
+		(if r (rev r) r))))
 
-(define (tokenise-string str symbol-alist fences escape . sep)
-  (let ((tokenlist (map car symbol-alist)))
-	 ;; This splits a line up according to the indicated tokens, fences, escape char and separator
-
-	 ;; (tokenise-string "echo this is a \\\"test\\\" >> file" '(("(" . ")") ("'") ("\"")) "\\" " ")
-	 ;; ==> ("echo" "this" "is" "a" " \\\"test\\\"" " " ">>" "file")
-
-	 ;; a null value for the cdr in an element of the fences list indicates that the closing sym is 
-	 ;; the same as the starting sym.
-
-	 (set! sep (if (null? sep) #f (car sep)))
-	 (if (not sep) (set! sep " "))
-
-	 (cond
-	  ((null? tokenlist)
-		(collapsing-strtok str sep))
-	  ((not (and (string? str) (list? tokenlist))) #f)
-	  ((string=? str "") '())
-	  (else 
-		(let sloop ((sstr str)
-						(results '())
-						)
-		  (let ((n (if (string? sstr) (string-length sstr) #f)))
-
-			 ;(display "collected ") (write results)(newline)
-
-			 (if (or (not sstr) (string=? sstr ""))
-				  (reverse results)
-				  (let ((mt (filter (lambda (y) y)
-										  (map (lambda (x) (if (and
-																		n
-																		(string? x)
-																		(>= n (string-length x))
-																		(string=? (substring sstr 0 (string-length x)) x))
-																	  x
-																	  #f)) tokenlist)))
-						  (cc (if (string=? sstr "") "" (string-car sstr)))
-						  )
-					 
-					 ;(if (pair? mt) (begin (display "MT ")(write mt)(newline)))
-
-					 ;; mt will either be null, or its head will be the first match for the head of the string
-					 (cond
-					  ((not cc)
-						(reverse results))
-
-					  ((string=? cc escape)
-						;;(display "*** Still buggered ***\n")
-						;;(display "..c1 ")
-						;;(write sstr)
-						;;(newline)
-						(sloop 
-						 (substring sstr (+ 1 (string-length escape)) n)
-						 (cons (string-append (car results) (substring sstr 0 (+ 1 (string-length escape)))) (cdr results)))
-						)
-
-					  ((string=? cc sep) ;; This is a separator, go around again
-						;;(display "..c2 ")
-						;;(write sstr)
-						;;(newline)
-						(sloop 
-						 (substring sstr (+ (strcspn sstr sep) 1) n)
-						 (if (and (pair? results) (string=? (car results) sep))
-							  results
-							  (cons sep results))
-						 ;;results
-						 )
-						)
+;; assoc on the cdr, but abort if it isn't there
+(define (cossa+ key alist)
+  (let ((r (cossa key alist)))
+	 (if r r (error 'Missing-key-in-alist key alist))))
 
 
-					  ((and (null? results) (null? mt)) ;; No match, no separator, no escape.
-						;;(display "..c3 ")
-						;;(write (substring sstr 1 n))
-						;;(newline)
-						(sloop 
-						 ;;(substr sstr 1 (- (string-length sstr) 1))
-						 (string-cdr sstr)
-						 ;;(substring sstr 1 n)
-						 ;;(cons (substring sstr 0 1) results)
-						 (cons cc results)
-						 ))
+(define (tokenise-string str symbol-alist escape . sep)
+  (define (first-match sstr tokenlist)
+	 (if (not (string? sstr)) (error 'first-match:first-arg-not-a-string))
+	 (filter (lambda (y) y)
+				(map (lambda (x) 
+						 (let ((n (if (string? x) (string-length x) #f)))
+							;;(display (string-append "testing \"" sstr "\" against \"" x "\"\n"))
+							(if (and
+								  n
+								  (>= n (string-length x))
+								  (<= n (string-length sstr))
+								  (string=? (substring sstr 0 n) x))
+								 x
+								 #f)
+							)) tokenlist)))
 
-					  ((and (string=? (car results) sep) (null? mt)) ;; No match, no separator, no escape.
-						;; the current (head) end of the list is a separator -- replaces it with the beginning of the word
-						;;(display "..c4 ")
-						;;(write sstr)
-						;;(newline)
-						(sloop 
-						 ;;(substring sstr 1 n)
-						 (string-cdr sstr)
-						 ;;(cons (substring sstr 0 1) (cdr results))
-						 (cons cc (cdr results))
-						 ))
+  (set! sep (if (null? sep) " " (car sep)))
 
-					  ((null? mt) ;; No match, no separator, no escape.
-						;;(display "..c5 ")
-						;;(write sstr)
-						;;(newline)
-						(sloop 
-						 ;;(substring sstr 1 n)
-						 (string-cdr sstr)
-						 ;;(cons (string-append (car results) (substr sstr 0 1)) (cdr results))
-						 (cons (string-append (car results) cc) (cdr results))
-						 ))
-
-					  ((and (string=? (car results) sep) (pair? mt))
-						;;(display "..c6 ")
-						;;(write sstr)
-						;;(newline)
-						(sloop 
-						 (substring sstr (string-length (car mt)) n)
-						 (cons 
-						  (let ((asym (assoc (car mt) symbol-alist)))
-							 (if asym
-								  (cdr asym)
-								  (car mt)))
-						  (cdr results))
-						 ))
-
-					  (mt
-						;;(display "..c7 ")
-						;;(write sstr)
-						;;(newline)
-						(sloop 
-						 (substring sstr (string-length (car mt)) n)
-						 (cons 
-						  (let ((asym (assoc (car mt) symbol-alist)))
-							 (if asym
-								  (cdr asym)
-								  (car mt)))
-						  results)))
-
-					  ((assoc (string-car sstr) fences)
-						(let ((l+r (fence-jumper sstr (assoc (string-car sstr) fences) #f)))
-						  (sloop 
-							(cadr l+r)
-							(cons (car l+r) results)
-							)))
-
-					  (else
-						;;(display "..c* ")
-						;;(write sstr)
-						;;(newline)
-						(sloop (substring sstr (string-length (car mt)) n)
-								 (cons 
-								  (let ((asym (assoc (car mt) symbol-alist)))
-									 (if asym
-										  (cdr asym)
-										  (car mt)))
-
-								  results)))
-					  )
-					 )))
+  (let ((return-strings-for-symbols #f) ;; 
+		  (start-paren (cossa+ 'start-paren symbol-alist))
+		  (end-paren (cossa+ 'end-paren symbol-alist))
+		  (start-bracket (cossa+ 'start-bracket symbol-alist))
+		  (end-bracket (cossa+ 'end-bracket symbol-alist))
+		  (start-brace (cossa+ 'start-brace symbol-alist))
+		  (end-brace (cossa+ 'end-brace symbol-alist))
+		  (squote (cossa+ 'squote symbol-alist))
+		  (dquote (cossa+ 'dquote symbol-alist))
+		  (bquote (cossa+ 'bquote symbol-alist))
+		  (en (string-length escape))
 		  )
+
+	 (cond ;; This should bail if we pass a really bad argument
+	  ((not (string? str))
+		(error 'tokenise-string:bad-string)
+		#f)
+	  ((and (not (pair? symbol-alist)) (not (null? symbol-alist)))
+		(error 'tokenise-string:bad-symbol-alist)
 		)
 	  )
-	)
+
+	 (let loop ((sstr str)
+					(result '(""))
+					)
+		;;(display "looping: ")(write sstr)(newline)
+		;;(display "         ")(write result)(newline)
+		(let* ((fm (first-match sstr (map car symbol-alist)))
+ 				 (n (if (null? fm) (string-length sstr) (string-length (car fm))))
+				 (cc (if (string=? str "") "" (string-car sstr)))
+				 )
+		  
+		  (if	(and (pair? result) (symbol? (car result)) (not (string=? sstr "")))
+				(loop sstr (cons (make-string 0) result))
+		  
+				(cond
+				 ((string=? sstr "") ;; we've reached the end of the string
+				  (if (or (null? result) (equal? result '("")))
+						'()
+						(reverse result)))
+
+				 ((and (string=? (substring sstr 0 en) escape)
+						 (> (string-length sstr) (string-length escape)))
+				  (let* ((ec (substring sstr en (+ 1 en)))
+							)
+					 (display "ESCAPE ")(display ec)(newline)
+					 (set! sstr (substring sstr en (string-length sstr)))
+					 (set! n (string-length sstr))
+					 (display "--> ")
+					 (if (zero? n)
+							 (loop "" (cons (string-append (car result) ec) (cdr result)))
+							 (loop (substring sstr 1 n) 
+									 (cons (string-append (car result) ec) (cdr result))
+									 )
+						  )
+					 )
+				  )
+
+				 ((string=? cc sep)
+				  (if (zero? (string-length (car result)))
+						(loop (substring sstr 1 n) result) ;; silently consume extra spaces (tabs pass through!)
+						(loop (substring sstr 1 n) (cons "" result)))) ;; start next token
+
+				 ((and (string? tab) (string=? cc tab)) ;; treat tabs as spaces
+				  (if (zero? (string-length (car result)))
+						(loop (substring sstr 1 n) result) ;; silently consume extra tabs
+						(loop (substring sstr 1 n) (cons "" result)))) ;; start next token
+
+				 ((or (not fm) (null? fm));; must be a normal part of the argument
+				  (loop (substring sstr 1 n) 
+						  (cons (string-append (car result) cc) (cdr result))
+						  ))
+
+				 (fm ;; this must match one of the operators in the alist.
+				  (let ((fme (assoc (car fm) symbol-alist)))
+					 (cond 
+					  ((member (cdr fme) '(squote dquote bquote))
+						(let ((partition (fence-jumper sstr (car fme))))
+						  (loop (cadr partition)
+								  (cons (string-append (car result) (car partition)) (cdr result)))))
+					  
+					  ;; Need to deal with the s-expression and s-expression-like things
+					  ((member (cdr fme) '(start-paren start-bracket start-brace quotedlist))
+						(let ((partition (sexpr-jumper sstr)))
+						  (loop (cadr partition)
+								  (cons "" (cons (car partition) result)))))
+
+					  ((eq? (cdr fme) 'quotedlist)
+						(let ((partition (sexpr-jumper sstr)))
+						  (loop (cadr partition)
+								  (cons "" (cons (car partition) result)))))
+
+					  (#f
+						(let ((partition (sexpr-jumper sstr)))
+						  (loop (cadr partition)
+								  (cons "" (cons (car partition) result)))))
+
+					  (#t ;; a standard thing -- 
+						(if #f
+							 (begin
+								(display "c T\n")
+								(display " fme: ")(write fme)(newline)
+								(display "sstr: ")(write sstr)(newline)
+								(display "  tr: ")(write (substring sstr (string-length (car fme)) (string-length sstr)))(newline)
+								(display "rslt: ")(write (cons (if #t (car fme) (cdr fme)) result))(newline)
+								))
+						(if (string=? (car result) "")
+							 (loop (substring sstr (string-length (car fme)) (string-length sstr))
+									 (cons (if return-strings-for-symbols (car fme) (cdr fme)) (cdr result)))
+							 (loop (substring sstr (string-length (car fme)) (string-length sstr))
+									 (cons (if return-strings-for-symbols (car fme) (cdr fme)) result))
+							 )
+						)
+					  ))
+				  )
+				 (#t 
+				  (display "This should never happen!\n") 'epic-fail)
+				 )
+				)
+		  )
+		)
+	 ) 
   )
+  		 
+
+
 
 
 ;; reconstructs the string either with spaces or the indicated separator
@@ -700,13 +718,19 @@
 			 (with-error-to-port err lmbda))))))
 
 
+(define (word-expand s)
+  (if (string? s) 
+		(word-expand-wrapper s)
+		s))
+
 ;; This resolves the programs in the path and allows you to use wildcards in the command 
 (define (*expand-path* file)
   (filter file-exists? 
 			 (let ((l 
-					  (map word-expand 
+					  (map (lambda (s)
+								(if (string? s) (word-expand s) s))
 							 (map (lambda (x) 
-									  (string-append x "/" file )) 
+									  (if (string? x) (string-append x "/" file ) x))
 									(strtok (list->string (map (lambda (x) 
 																		  (if (equal? x (car (string->list ":"))) 
 																				(car (string->list " ")) x)) 
@@ -839,169 +863,6 @@
 		  #t)))
 				
 (*add-builtin* "add-builtin" *add-builtin*)
-
-
-;;; (define (*igor-execute-builtin-process* in-the-background func argv-list input-port output-port error-port)
-;;;   (if (string? func)
-;;; 		(cond
-;;; 		 ((procedure? func)
-;;; 		  (apply func argv-list))
-;;; 		 ((and (string? func) (string=? func "exit"))
-;;; 		  'EXIT)
-;;; 		 ((string? func)
-;;; 		  ;(display func)
-;;; 		  ;(display ": ")
-;;; 		  ;(display argv-list)
-;;; 		  ;(newline)
-;;; 		  )
-;;; 		 (else #t))
-;;; 		(apply (string->symbol func) argv-list)
-;;; 		) )
-
-
-;;; ;; This will execute the command "cmd-string", passing the arguments in argv-list.  Does backgrounding and redirections
-;;; (define (*igor-execute-single-process* in-the-background cmd-string argv-list input-port output-port error-port)
-;;;   (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
-;;;   (if (or (not (string? cmd-string)) (zero? (string-length cmd-string)))
-;;; 		(begin 
-;;; 		  ;(display "Something not quite right.\n" error-port)
-;;; 		  -1)
-
-;;; 		(let ((procid #f)
-;;; 				)
-;;; 		  (cond
-;;; 			((> procid 0) ;; parent
-;;; 			 (if (not in-the-background)
-;;; 				  (waitpid procid 0)
-;;; 				  (or #t
-;;; 						;(if *igor-report-backgrounding* (display (string-append "[started background process: " cmd-string) (current-error-port)))
-;;; 						)
-;;; 				  )
-;;; 			 (if (not (equal? input-port (current-input-port)))
-;;; 				  (close-input-port input-port))
-			 
-;;; 			 (if (not (equal? output-port (current-output-port)))
-;;; 				  (close-output-port output-port))
-			 
-;;; 			 (if (not (equal? error-port (current-error-port)))
-;;; 				  (close-output-port error-port))
-;;; 			 'ok
-;;; 			 )
-;;; 			((zero? procid) ;; child
-;;; 			 (let ((sigint (set-signal-action! signal/interrupt #t))
-;;; 					 (sigquit (set-signal-action! signal/quit #t))
-;;; 					 (sigterm (set-signal-action! signal/term #t)))
-
-;;; 				(with-io-ports input-port output-port error-port 
-;;; 									(lambda () 
-;;; 									  (execute (expand-path cmd-string) argv-list)))
-				
-;;; 				(set-signal-action! signal/interrupt sigint)
-;;; 				(set-signal-action! signal/quit sigquit)
-;;; 				(set-signal-action! signal/term sigterm)
-;;; 				)
-;;; 			 )
-;;; 			(else
-;;; 			 ;;(display (string-append "Failed to fork for " cmd-string) (current-error-port))
-;;; 			 -4
-;;; 			 )
-;;; 			)
-;;; 		  )	
-;;; 		)
-;;;   )
-		  
-			 
-;;; ;(define igor-execute-single-process *igor-execute-single-process*)
-;;; (define (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
-;;;   (if #t -1	
-;;; 		(begin
-;;; 		  ;;(display (string-append "** " (if in-the-background "[bg]" "") " " cmd-string))
-;;; 		  (for-each (lambda (x) (display " ") (display x)) argv-list)
-;;; 		  (newline)
-;;; 		  -1))
-;;;   )
-
-;;; (define (process-token-list arglist inp outp errp)
-;;;   "Not working yet"
-;;;   (let ((set-bg! (lambda (cc x) (list-set! cc x 0)))
-;;; 		  (set-inp! (lambda (cc x) (list-set! cc x 1)))
-;;; 		  (set-outp! (lambda (cc x) (list-set! cc x 2)))
-;;; 		  (set-errp! (lambda (cc x) (list-set! cc x 3)))
-;;; 		  (set-cmd! (lambda (cc x) (list-set! cc x 3)))
-;;; 		  )
-;;; 	 (let loop ((rslt '())
-;;; 					(collecting-command '())
-;;; 					(argl arglist)
-;;; 					)
-;;; 		(cond
-;;; 		 ((null? argl) rslt)
-;;; 		 ((not (pair? argl)) 'process-token-list:bad-element-in-arglist)
-
-;;; 		 ;; a command is a list (append (list bgp inp outp errp) cmdpath-or-name arguments)
-;;; 		 ;; where arguments is the argv (which includes the passed cmd)
-;;; 		 ((null? collecting-command)
-;;; 		  (list #f inp outp errp #f)) ;; the command is #f because it doesn't exist yet
-
-;;; 		 ;; add a literal list
-;;; 		 ((and (string? (car argl)) (> (string-length (car argl)) 1) (string=? (substring (car argl) 0 2) "'("))
-;;; 		  (loop rslt 
-;;; 				  (if (not (list-ref collecting-command 4)) ;; not there yet
-;;; 						(append collecting-command (list (car argl) (car argl))) ;; add the literal list as the "command"
-;;; 						(append collecting-command (list (car argl)))) ;; just append the list as an argument
-;;; 				  (cdr argl)
-;;; 				  ))
-		 
-;;; 		 ((equal? (car argl) 'heredoc)
-;;; 		  (display "Here documents are not supported yet\n" errp)
-;;; 		  'process-token-list:No-here-documents!
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stdoutapp)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stderrapp)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stdouterrapp)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stdinredir)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stdoutredir)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stderredir)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'stdouterredir)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'outpipe)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'errpipe)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'outerrpipe)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'makebg)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'nextsep)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'begblock)
-;;; 		  )
-;;; 		 ((equal? (car argl) 'endblock)
-;;; 		  )
-;;; 		 (else 
-;;; 		  (loop rslt 
-;;; 				  (let ((bit (word-expand (car argl))))
-;;; 					 (if bit
-;;; 						  (append collecting-command bit) ;; add the expansion
-;;; 						  (append collecting-command (list (car argl)))) ;; else add the work
-;;; 					 )
-;;; 				  (cdr argl)
-;;; 				  ))
-		  
-;;; 		  )
-;;; 		)
-;;; 	 )
-;;;   )
-		
-		
-		
-	  
-
 
 ;;(if verbosec-support (display "csupported\n"))
 

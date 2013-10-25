@@ -50,13 +50,13 @@
 (define-c (maybe-null free stat) (file-stat "file_stat") (string))
 
 ;;(define-c int (system "system") (string))
-(define-c (maybe-null free array string null) (word-expand "wordexp_wrapper") (string))
+(define-c (maybe-null free array string null) (word-expand-wrapper "wordexp_wrapper") (string))
 
 (define-c string (get-env "getenv") (string))
 (define-c int (set-env "setenv") (string string int))
 (define-c int (unset-env "unsetenv") (string))
 					  
-(define-c sexp (sexp-fd "sexp_fd") (sexp sexp))
+(define-c int (sexp-fd-val "sexp_fd_val") (sexp))
 
 ;;(define-c sexp (argv-to-list "argv_to_list") (sexp (array string) int))
 

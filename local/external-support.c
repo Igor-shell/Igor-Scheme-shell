@@ -21,8 +21,9 @@
 //}
 
 
-sexp sexp_fd(sexp ctx, sexp ob) {
-	return sexp_make_integer(ctx, sexp_port_fileno(ob));
+int sexp_fd_val(sexp ob) {
+	sexp_fileno_fd(ob);
+
 }
 
 

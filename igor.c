@@ -89,7 +89,9 @@
 #endif
 
 
-#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
+
+
+//#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
 
 #if !defined(Cprintf)
 #define Cprintf(format, args ...)
@@ -1008,10 +1010,13 @@ char *evaluate_scheme_expression(char *Sexpr,  char *inputstring) {
 
 
 #define START_EVAL_BLOCK " " \
-			"(let ((output (open-output-string)) (rslt #f) (*last_igor_eval* #f))" \
+			"(let* ((op (current-output-port))"\
+			"    (output (open-output-string)) (rslt #f) (*last_igor_eval* #f))" \
+		   "    (current-output-port	output)"              \
 			"    (set! *last_igor_eval* %s)"						 \
 			"    (display *last_igor_eval* output)"			 \
 			"    (set! rslt (get-output-string output))"		 \
+         "    (current-output-port op)"                   \
 			"    (close-output-port output) "				 
 
 #define END_EVAL_BLOCK ")"
@@ -1044,11 +1049,14 @@ char *evaluate_scheme_expression(char *Sexpr,  char *inputstring) {
 
 		begin{
 			char *p =  (sexp_stringp(result) ? sexp_string_data(result) : NULL);
+
 			if (result == SEXP_VOID || result == SEXP_UNDEF 
 				|| (p && (!*p || !strcmp(p, "#<undef>") || !strcmp(p, "#<void>")))) {
 				rstr = strdup("");
 			}
-			else if (sexp_stringp(result)) rstr = strdup(sexp_string_data(result));
+			else if (sexp_stringp(result)) {
+				rstr = strdup(sexp_string_data(result));
+			}
 			else {
 				asprintf(&rstr,"Failed to evaluate [%s]", sexpr);
 			}
@@ -1657,7 +1665,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 		//char *s = Argv[Argc];
 		//if (is_magic(s) || strchr("(),|&;<>{}", *s)) continue;
 
-		//DPTprintf("DPT Argv[%d] = \"%s\"\n",Argc, Argv[Argc]);
+		DPTprintf("DPT Argv[%d] = \"%s\"\n",Argc, Argv[Argc]);
 	}
 
 	C->argv = (char **)calloc(Argc+1, sizeof(char **));
@@ -1680,10 +1688,11 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 
 		if (is_magic(Argv[i])) {
 			if (0) {}
-			//if (strcmp("(,", *Argv[i])) { // Catch the scheme stuff early
+			//else if ('(' == *Argv[i]) { // Catch the scheme stuff early
+			//	DPTprintf("%s:%d -- processing %s as a part of scheme command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && C->argv[0] && *C->argv[0]) ? C->argv[0] : "(none)");
 			//}
 			else if (!strncmp(Argv[i], quotedlist, strlen(quotedlist)) || !strncmp(Argv[i], shellcmd, strlen(shellcmd))) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && C->argv[0] && *C->argv[0]) ? C->argv[0] : "(none)");
 				C->argv[C->argc++] = Argv[i];
 				C->argv[C->argc] = 0;
 			}
@@ -2054,17 +2063,13 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 
 		// if the first thing in the list is an s-expression and the *next thing in the list is an s-expression
 		if (is_sexp(C->argv[0]) && C->argc == 1 && (!Argv[i+1] || (Argv[i] && is_sexp(Argv[i+1])))) { 
-//			int k;
-//			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 			i++; // We *do not* increment here, because i already points to the right spot
-//			if (Argv[i] && *Argv[i]) {
-//				DPTprintf("%s:%d -- which will be followed by %s\n", __FUNCTION__, __LINE__, Argv[i]);
-//			}
 			
-//			for (k = 0; k < C->argc; k++) {
-//				DPTprintf("  [%d] %s\n", k, C->argv[k]);
-//			}
-
+			while (Argv[i] && *Argv[i] && is_sexp(Argv[i])) {
+				DPTprintf("%s:%d -- which will be followed by %s\n", __FUNCTION__, __LINE__, Argv[i]);
+				C->argv[C->argc++] = Argv[i++];
+			}
 			C->next = process_token_list(Argv + i, in, out, err);
 			return C;
 		}
@@ -2132,6 +2137,7 @@ int scm_execute_single_process(int in_the_background, char *cmd, char **argv, in
 	sexp_gc_var2(exec_stuff,result);
 	sexp_gc_preserve2(ctx,exec_stuff,result);
 
+/*
 	exec_stuff = SEXP_NULL;
 	//exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,shute), exec_stuff);
 	//exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,shuto), exec_stuff);
@@ -2155,6 +2161,7 @@ int scm_execute_single_process(int in_the_background, char *cmd, char **argv, in
 #endif
 	//result = sexp_apply(ctx, igor_dispatch_exec, exec_stuff)
 
+	*/
 	sexp_gc_release2(ctx);
 	
 	return -1;
@@ -2238,9 +2245,16 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
 		}
 
 		Dprintf("Child (%s) about to exec\n",cmd);
-		signal(SIGINT, SIG_DFL);
-		signal(SIGQUIT, SIG_DFL);
-		signal(SIGTERM, SIG_DFL);
+		begin {
+			struct sigaction sa[1];
+			
+			sa->sa_handler = SIG_DFL;
+			sa->sa_flags = SA_RESETHAND;
+
+			sigaction(SIGINT, sa, NULL);
+			sigaction(SIGQUIT, sa, NULL);
+			sigaction(SIGTERM, sa, NULL);
+		}
 		
 		begin {
 			char *tcmd = completed_path(cmd);
@@ -2254,6 +2268,8 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
 					if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
 					fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
 				}
+
+				//LOOK AT process->string and kin from /usr/local/share/chibi/chibi/process.scm
 
 				if ((n = execv(tcmd, argv)) == -1) {
 		            //time(&then);
@@ -2318,6 +2334,12 @@ sexp run_commands(cmd_t *cmd) {
 			Dprintf("Builtin function: %s\n", cmd->argv[0]);
 		}
 		
+/*
+		begin {
+			int i = 0;
+			for (i = 0; cmd->argv[i]; i++) fprintf(stderr, "argv[%d] = %s\n", i, cmd->argv[i]);
+		}
+*/
 		if (op) {
 			sn = execute_builtin(op, cmd->argv, cmd->in, cmd->out);
 			return sn;
@@ -2505,6 +2527,7 @@ void run_command_epilogue(char *cmds, cmd_t *C, sexp rv) {
 
 sexp execute_command_string(char *cmds) {
 	char **argv = 0;
+	int i;
 	cmd_t *C = 0;
 
 	argv = tokenise_cmdline(cmds);
@@ -2525,6 +2548,7 @@ sexp execute_command_string(char *cmds) {
 		
 
 		free_cmd(C);
+		for (i = 0; argv[i]; i++) Free(argv[i]);
 		Free(argv);
 
 		return rtv;
@@ -2994,9 +3018,9 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 	}
 	fprintf(stderr,"] ");
 	
-	fprintf(stderr,"<%d,%d> &%d", in, out, err);
+	fprintf(stderr,"<%d,%d>", in, out);
 //	fprintf(stderr, " %s\n", (in_the_background ? "&" : ""));
-	return 0;
+//	return 0;
 #endif
 	// Need to collect *all* the arguments  and process them as input....
 	int k;
@@ -3006,7 +3030,7 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 	sexp_gc_var3(result, inexpr, outexpr);
 	sexp_gc_preserve3(ctx, result, inexpr, outexpr);
 
-	fprintf(stderr,"Entering scm_func %s\n", *argv);
+//	fprintf(stderr,"Entering scm_func %s\n", *argv);
 
 	k = 0;
 	
@@ -3014,16 +3038,20 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 		return SEXP_FALSE;
 	}
 	
-	sline = strdup("");
+	sline = strdup("(begin ");
 
 	// Stick all the s-expressions in one spot
 	for (Sexp = argv; *Sexp; Sexp++) {
+//		fprintf(stderr,"processing %s, %s is next\n", Sexp[0], Sexp[1]);
 		k += strlen(*Sexp);
-		sline = (char *)reallocate(sline, (strlen(sline) + strlen(*Sexp) + k + 3) * sizeof(char));
+		sline = (char *)reallocate(sline, (strlen(sline) + strlen(*Sexp) + k + 4) * sizeof(char));
 		
 		if (Sexp != argv) strcat(sline, " "); // insert a space if it isn't the first one
 		strcat(sline,*Sexp);
 	}
+	strcat(sline, ")");
+
+//	fprintf(stderr,"SEXP %s\n", sline);
 
 	r = NULL; 
 	// over all the arguments, 
@@ -3061,7 +3089,13 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 			q = evaluate_scheme_expression(p); // Sets the ERRCON state appropriately
 #endif
 		}
-		
+
+		begin {
+			int n = strlen(q) - 8;
+			if (n > 0 && !strcmp(q+n, "#<undef>"))	q[n] = 0;
+			if (n+1 > 0 && !strcmp(q+n, "#<void>"))	q[n+1] = 0;
+		}
+
 		result = sexp_eval_string(ctx,"*last_igor_eval*",-1,ENV);
 
 		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
@@ -3097,7 +3131,7 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 
 	if (k > 0) write(out, "\n", 1);
 
-	fprintf(stderr,"scm_func finished evaluating %s\n", sline);
+	//fprintf(stderr,"scm_func finished evaluating %s\n", sline);
 	
 	Free(sline);
 
@@ -3299,10 +3333,20 @@ int igor(int argc, char **argv) {
 
    /* check if this is an interactive shell */
 	if (isatty(0) && isatty(1)) {
-		signal(SIGINT, SIG_IGN);
-		signal(SIGQUIT, SIG_IGN);
-		signal(SIGTERM, SIG_IGN);
-		signal(SIGCHLD, &catch_sigchld);
+		begin {
+			struct sigaction sa[1];
+			
+			sa->sa_handler = SIG_DFL;
+			sa->sa_flags = SA_RESETHAND;
+
+			sigaction(SIGINT, sa, NULL);
+			sigaction(SIGQUIT, sa, NULL);
+			sigaction(SIGTERM, sa, NULL);
+
+			sa->sa_handler = &catch_sigchld;
+
+			sigaction(SIGCHLD, sa, NULL);
+		}
 	}
 #define MAX_CMD 2048
 
