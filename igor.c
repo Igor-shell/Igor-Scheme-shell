@@ -89,8 +89,6 @@
 #endif
 
 
-
-
 //#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
 
 #if !defined(Cprintf)
@@ -118,6 +116,7 @@
 /*-  Included files  */
 
 #define _GNU_SOURCE
+
 
 #define begin if(1)
 
@@ -238,7 +237,7 @@ char *supporting_initialisation[] = {
 
 /******************************/
 
-
+int SHUTI = 1;
 int running_script = 0;
 int track_execv = 0;
 int repl_write = -1; // by default doesn't print things
@@ -262,6 +261,7 @@ char dquote = '"';
 char bquote = '`';
 
 char *quotedlist = "'(";
+char *bquotedlist = "`(";
 char *heredoc = "<<";
 char *andsep = "&&";
 char *orsep = "||";
@@ -339,7 +339,7 @@ typedef struct CMD_T {
 	int output_to_sexp;
 	int input_from_sexp;
 	char *inputstring;
-	int shuto, shute;
+	int shuti, shuto, shute;
 	int bg;
 	struct CMD_T *next;
 } cmd_t;
@@ -382,7 +382,7 @@ char *read_all(int fd) {
 			return NULL;
 		}
 	}
-	close(fd);
+//	close(fd);
 	return inputstring;
 }
 
@@ -1442,7 +1442,9 @@ char **tokenise_cmdline(char *cmdline) {
 			collecting[i] = 0;
 		}
 
-		else if (!strncmp(cp, quotedlist, strlen(quotedlist)) || !strncmp(cp, shellcmd, strlen(shellcmd))) { // this is a quoted list or "special" scheme expression
+		else if (!strncmp(cp, quotedlist, strlen(quotedlist)) 
+			/*|| !strncmp(cp, bquotedlist, strlen(quotedlist)) */
+			|| !strncmp(cp, shellcmd, strlen(shellcmd))) { // this is a quoted list or "special" scheme expression
 			char *tcp = jump_sexp(cp+1, sescape);
 			int n = collecting?strlen(collecting):1;
 
@@ -1928,6 +1930,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 					C->out = pipefd[1];
 					C->shuto = 1;
 					C->next = process_token_list(Argv + i, pipefd[0], out, err);
+					C->next->shuti = SHUTI;
 					return C;
 				}
 			}
@@ -1960,6 +1963,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 					C->err = pipefd[1];
 					C->shute = 1;
 					C->next = process_token_list(Argv + i, pipefd[0], out, err);
+					C->next->shuti = SHUTI;
 					return C;
 				}
 			}
@@ -1993,6 +1997,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 					C->out = C->err = pipefd[1];
 					C->shuto = C->shute = 1;
 					C->next = process_token_list(Argv + i, pipefd[0], out, err);
+					C->next->shuti = SHUTI;
 					return C;
 				}
 			}
@@ -2099,32 +2104,37 @@ sexp execute_builtin(Builtin *op, char **argv, int input, int output) {
 	sexp_preserve_object(ctx,r);
 
 	if (input > 2) {
+		char *blort = NULL;
 		oin = sexp_eval_string(ctx,"(current-input-port)", -1, ENV);
 //		adjust_fd(input, 0);
 //		sexp_eval_string(ctx,"(current-input-port (open-input-file-descriptor 0))", -1, ENV);
+		asprintf(&blort, "(current-input-port (open-input-file-descriptor %d))", input);
+
+		sexp_eval_string(ctx,blort, -1, ENV);
+		Free(blort);
 	}
 	
 	if (output > 2) {
+		char *blort = NULL;
 		oout = sexp_eval_string(ctx,"(current-output-port)", -1, ENV);
-		adjust_fd(output, 1);
-		sexp_eval_string(ctx,"(current-output-port (open-output-file-descriptor 1))", -1, ENV);
+//		adjust_fd(input, 0);
+//		sexp_eval_string(ctx,"(current-output-port (open-output-file-descriptor 1))", -1, ENV);
+		asprintf(&blort, "(current-input-port (open-output-file-descriptor %d))", output);
 	}
 
+
 	if (input > 2) {
-		inputstring = read_all(input);
+		inputstring = read_all(input); 
 		if (!inputstring) return SEXP_FALSE;
 	}
 
 	//DPTprintf("about to run %s\n", *argv);
 	r = (op->func)(argv, 0, 1, inputstring);
 
-	if (output > 2) close(output);
-
 	sexp_apply(ctx, sexp_eval_string(ctx,"current-input-port",-1,ENV), sexp_cons(ctx,oin, SEXP_NULL));
 	sexp_apply(ctx, sexp_eval_string(ctx,"current-output-port",-1,ENV), sexp_cons(ctx,oout, SEXP_NULL));
 
 	Free(inputstring);
-
 	sexp_gc_release3(ctx);
 	return r;
 }
@@ -2317,7 +2327,6 @@ sexp run_commands(cmd_t *cmd) {
 		Builtin *op = NULL;
 		if (!cmd->argv[0] || !cmd->argv[0][0]) continue;
 
-
 		// So what I need to do here is set up the current-*-ports for indicated scheme expressions (the underlying fds ought to be ok)
 
 		if (0);
@@ -2340,9 +2349,9 @@ sexp run_commands(cmd_t *cmd) {
 			for (i = 0; cmd->argv[i]; i++) fprintf(stderr, "argv[%d] = %s\n", i, cmd->argv[i]);
 		}
 */
+
 		if (op) {
 			sn = execute_builtin(op, cmd->argv, cmd->in, cmd->out);
-			return sn;
 		}
 		else if ((n = scm_execute_single_process(cmd->bg, *cmd->argv, cmd->argv, cmd->in, cmd->out, cmd->err)) >= 0) {
 			// fine;
@@ -2365,9 +2374,9 @@ sexp run_commands(cmd_t *cmd) {
 
 		if (cmd->shuto) Close(cmd->out);
 		if (cmd->shute) Close(cmd->err);
-		cmd->shuto = cmd->shute = 0;
-		cmd->out = cmd->err = -1;
-		
+		if (cmd->shuti) Close(cmd->in);
+		cmd->shuti = cmd->shuto = cmd->shute = 0;
+		cmd->in= cmd->out = cmd->err = -1;
 
 		/*
 		  if (command was piping into something) {
@@ -2600,9 +2609,9 @@ void command_loop(FILE *f) {
 		Cprintf("about to run the command [%s]\n", cmd);
 		umask((mode_t)(S_IWGRP|S_IWOTH));
 		if (!f && !running_script) { // reset the file descriptors
-			dup2(IN, 0);
-			dup2(OUT,1);
-			dup2(ERR,2);
+			if (IN != 0) dup2(IN, 0);
+			if (OUT != 1) dup2(OUT,1);
+			if (ERR != 2) dup2(ERR,2);
 		}
 
 		update_internal_c_variables();
@@ -2909,6 +2918,54 @@ sexp cd_func(char **argv, int in, int out, char *inputstring) {
 	else abort();
 	return SEXP_TRUE;
 }
+
+
+sexp current_fdset_func(char **argv, int In, int Out, char *inputstring) {
+	char *a;
+	asprintf(&a,"in: %d; out: %d; err: %d\n", In, Out, 2);
+	write(1,a,strlen(a));
+	return SEXP_TRUE;
+}
+
+sexp display_func(char **argv, int in, int out, char *inputstring) {
+	sexp returnv = SEXP_FALSE;
+	int i;
+	
+ 	Cprintf("display_func\n");
+
+	fprintf(stderr,"%d:%d\n", in, out);
+
+	for (i = 1; argv[i]; i++) {
+		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+#if defined(NewEvaluateSchemeExpression)
+			char *ss = evaluate_scheme_expression(argv[i], NULL);
+#else
+			char *ss = evaluate_scheme_expression(argv[i]);
+#endif
+			if (ss) {
+				free(argv[i]);
+				argv[i] = ss;
+			}
+		}
+	}
+
+	if (argv && *argv) {
+		sexp_gc_var1(rslt);
+		sexp_gc_preserve1(ctx, rslt);
+
+		for (i = 1; argv[i]; i++) {
+			if (i > 1) write(out," ",1);
+			write(out,argv[i],strlen(argv[i]));
+		}
+		write(out,"\n",1);
+
+		sexp_gc_release1(ctx);
+
+		returnv = SEXP_TRUE;
+	}
+	return returnv;
+}	
+
 
 sexp run_source_file(char *filename) {
 	FILE *f = NULL;
@@ -3275,6 +3332,10 @@ void install_builtins() {
 	builtins = insert_builtin(builtins, "unset", unset_func);
 	builtins = insert_builtin(builtins, "unsetenv", unset_func); // alias
 	builtins = insert_builtin(builtins, "unset!", unset_func);   // alias
+
+	// debuggging things
+	builtins = insert_builtin(builtins, "current-fds", current_fdset_func);
+	builtins = insert_builtin(builtins, "display", display_func);
 }
 
 int exit_value(sexp rtnv, int but_continue) {
@@ -3304,9 +3365,9 @@ int igor(int argc, char **argv) {
 	sexp_gc_preserve1(ctx,rtnv);
 	
 	add_magic(quotedlist);
-	add_magic(heredoc);
-	add_magic(andsep);
-	add_magic(orsep);
+//	add_magic(heredoc);
+//	add_magic(andsep);
+//	add_magic(orsep);
 	add_magic(outerrpipe);
 	add_magic(errpipe);
 	add_magic(outpipe);
