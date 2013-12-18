@@ -1,4 +1,4 @@
-// -*- outline-regexp: "/\\*-+";  -*-
+// -*- outline-regetxp: "/\\*-+";  -*-
 /*-  Identification and Changes  */
 
 /*
@@ -35,6 +35,11 @@
 #define USES_CHIBI
 //#define USES_GAMBIT
 //#define USES_GUILE
+
+
+//#define reallocate(p,s) realloc(p, s)
+#define reallocate(p,s) ({void *q = NULL; fprintf(stderr,"REALLOC %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q =  realloc(p, s); fprintf(stderr,"REALLOCATED %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q;})
+
 
 
 //#define Cprintf(format, args...) printf(format, ##args) // execution in command-loop
@@ -266,6 +271,9 @@ typedef struct CMD_T {
 	// kind of token it is, namely one ofthe following types: program, s-expression, unquoting-s-expression, splicing-s-expression, 
 	//	function-as-program (builtin), argument, commandline-fragment (like the bit leading up to an s-expression)
 	int in, out, err;
+	int output_to_sexp;
+	int input_from_sexp;
+	char *inputstring;
 	int shuto, shute;
 	int bg;
 	struct CMD_T *next;
@@ -275,6 +283,43 @@ typedef struct CMD_T {
 char **magic_string = NULL;
 int n_magic_strings = 0;
 
+int Close(int fd) {
+	if (fd >= 0) fd = close(fd);
+	else {
+		abort();
+		return EBADF;
+	}
+	return 0;
+}
+
+char *read_all(int fd) {
+	char *inputstring = NULL;
+	int i = 0, n = 0, k = 0; // i is the the string length, n is amount read, k is the size of the buffer
+	
+	if (fd < 0) return NULL;
+
+	inputstring = (char *)malloc(1024);
+	if (inputstring) k += 1024;
+	else return NULL;
+		
+	*inputstring = 0;
+
+	i = n = 0;
+	for (n = read(fd, inputstring + i, 1023); n > 0; n = read(fd, inputstring + i, 1023)) {
+		i += n;
+		inputstring[i] = 0;
+// THIS DIES
+
+		inputstring = (char *)reallocate(inputstring, i+1024);
+		if (inputstring) k = i+1024;
+		else {
+			fprintf(stderr,"Unable to allocate memory for builtin input pipe!\n");
+			return NULL;
+		}
+	}
+	close(fd);
+	return inputstring;
+}
 
 char *completed_path(char *s) {
 	char *sexpr, *t;
@@ -347,7 +392,7 @@ void add_magic(char *str) {
 		for (i = 0; i < n_magic_strings && strcmp(magic_string[i], str); i++);
 
 		if (i >= n_magic_strings) {
-			magic_string = (char **)realloc(magic_string, (n_magic_strings+2)*sizeof(char *));
+			magic_string = (char **)reallocate(magic_string, (n_magic_strings+2)*sizeof(char *));
 			magic_string[n_magic_strings++] = strdup(str);
 			magic_string[n_magic_strings] = 0;
 		}
@@ -508,7 +553,6 @@ char *read_line(FILE *f, char *prompt_function) {
 	static int n1 = 85, n2 = 171;
 	static int k = -1;
 
-	
 	if (!f && !running_script) {
 		//char *prompt = strdup("Thur? ");
 		char *prompt = evaluate_scheme_expression(prompt_function);
@@ -580,7 +624,9 @@ char *read_line(FILE *f, char *prompt_function) {
 		for (n = strlen(linebuffer); !feof(f) && (*linebuffer == 0 || linebuffer[n-1] != '\n'); n = strlen(linebuffer)) {
 			if (k - n < n1) {
 				int t;
-				linebuffer = (char *)realloc(linebuffer, k+n2);
+
+				linebuffer = (char *)reallocate(linebuffer, k+n2);
+
 				if (!linebuffer) Abort("Out of memory");
 				t = k+n2;
 				n1 = n2;
@@ -620,7 +666,7 @@ char *excise_string(char *s, char *p, int n) {
 char *insert_string(int n, char *s, char *p, char *insertion) {
 	char *tmp;
 	if (p < s) abort();
-	if (strlen(s) + strlen(insertion) + 1  > n) s = (char *)realloc(s, strlen(s) + strlen(insertion) + 1);
+	if (strlen(s) + strlen(insertion) + 1  > n) s = (char *)reallocate(s, strlen(s) + strlen(insertion) + 1);
 
 	tmp = strdup(p);
 	strcpy(p, insertion);
@@ -862,7 +908,7 @@ char *word_expand_string(char *s) {
 		n += strlen(arg.we_wordv[i]);
 	}
 	
-	r = malloc((n + i)*sizeof(char));
+	r = malloc(1 + (n + i)*sizeof(char));
 	*r = 0;
 	for (k = 0; k < i; k++) {
 		if (k && k+1 < i) strcat(r," ");
@@ -1081,7 +1127,8 @@ char *sexpr_depth(char *buffer, char *str) {
 
 	if (!str) abort();
 
-	buffer = (char *) realloc(buffer, strlen(str) + 3);
+	
+	buffer = (char *) reallocate(buffer, strlen(str) + 3);
 	memset(buffer, 0, (strlen(str) + 3)*sizeof(char));
 
 	for (p = str; *p;) {
@@ -1182,18 +1229,19 @@ char **tokenise_cmdline(char *cmdline) {
 		if (!cp || !*cp) { // either there is nothing there, or we have reached the end of the cmdline
 			if (i > 0) { // we are still collecting a string, so
 				// add another bit to the token array
-				argv = (char **)realloc(argv, (argc + 2)*sizeof(char **));
+				argv = (char **)reallocate(argv, (argc + 2)*sizeof(char **));
 				argv[argc] = strdup(collecting);
 				*collecting = 0;
 				argc++;
 				argv[argc] = 0;
 			}
 			else { // we *aren't* collecting, so just add the terminating null
-				argv = (char **)realloc(argv, (argc + 1)*sizeof(char **));
+				argv = (char **)reallocate(argv, (argc + 1)*sizeof(char **));
 				argv[argc] = 0;
 			}
 
 			Free(collecting);
+
 			return argv;
 		}
 
@@ -1205,7 +1253,7 @@ char **tokenise_cmdline(char *cmdline) {
 		else if (cp != collecting && isspace(*cp)) {
 			// We have reached a gap between arguments
 			i = 0;
-			argv = (char **)realloc(argv, (argc + 2)*sizeof(char **));
+			argv = (char **)reallocate(argv, (argc + 2)*sizeof(char **));
 			argv[argc++] = strdup(collecting);
 			argv[argc] = 0; // for safety's sake
 			cp++;
@@ -1221,7 +1269,7 @@ char **tokenise_cmdline(char *cmdline) {
 			char *tcp = jump_sexp(cp+1, sescape);
 			int n = collecting?strlen(collecting):1;
 
-			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)realloc(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
+			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)reallocate(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
 			strncpy(collecting+i, cp, tcp - cp);
 			collecting[i+tcp - cp] = 0;
 
@@ -1258,7 +1306,7 @@ char **tokenise_cmdline(char *cmdline) {
 			char *tcp = jump_sexp(cp, sescape); 
 			int n = collecting?strlen(collecting):1;
 
-			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)realloc(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
+			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)reallocate(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
 			strncpy(collecting+i, cp, tcp - cp);
 			collecting[i+tcp - cp] = 0;
 
@@ -1279,10 +1327,10 @@ char **tokenise_cmdline(char *cmdline) {
 			else { // this is a special symbol like | or >> ... tokenise it separately
 				if (i > 0) {
 					// finish the last token
-					argv = (char **)realloc(argv, (argc + 3)*sizeof(char **));
+					argv = (char **)reallocate(argv, (argc + 3)*sizeof(char **));
 					argv[argc++] = strdup(collecting);
 				}
-				else argv = (char **)realloc(argv, (argc + 2)*sizeof(char **));
+				else argv = (char **)reallocate(argv, (argc + 2)*sizeof(char **));
 
 
 				if ((*ims == *scmunquote)) { // we have one of the unquoting rules
@@ -1367,9 +1415,11 @@ char *handle_filename(char *s) {
 		}
 	}
 	else {
+
 		n = wordexp(s, &arg, 0);
 		
 		if (n != 0) {
+			// We need to tease this out a bit
 			t = strdup(s);
 		}
 		else {
@@ -1404,23 +1454,23 @@ char **word_expansion(char **argv, int *argc, int argix) {
 
 	if (err) return NULL;
 
-	n = arg.we_wordc + *argc;
+	n = arg.we_wordc + *argc + 1;
 	
 	if (arg.we_wordc == 0) {
 		int j;
-		char *s = argv[argix];
+		//char *s = argv[argix];
 		for (j = argix; j < *argc; j++) argv[j] = argv[j+1];
 		*argc = *argc-1;
-		Free(s); // I hope this is ok!
+		//Free(s); // I hope this is ok! .. maybe not?
 	}
 	else if (arg.we_wordc == 1) {
 		int sn = strlen(arg.we_wordv[0]);
-		if (strlen(argv[argix]) < sn) argv[argix] = (char *)realloc(argv[argix], (sn+2) * sizeof(char));
+		if (strlen(argv[argix]) < sn) argv[argix] = (char *)reallocate(argv[argix], (sn+2) * sizeof(char));
 		strcpy(argv[argix], arg.we_wordv[0]);
 	}
 	else {
 		int i;
-		argv = (char **)realloc(argv,sizeof(char **) * (n+1));
+		argv = (char **)reallocate(argv,sizeof(char **) * (n+1));
 		for (i = *argc; i <= n; i++) argv[i] = 0;
 		if (!argv) abort();
 
@@ -1431,7 +1481,7 @@ char **word_expansion(char **argv, int *argc, int argix) {
 			
 			argv[i+argix] = strdup(arg.we_wordv[i]);
 
-			//argv[i+argix] = (char *)realloc(argv[i+argix], (strlen(arg.we_wordv[i])+1) * sizeof(char));
+			//argv[i+argix] = (char *)reallocate(argv[i+argix], (strlen(arg.we_wordv[i])+1) * sizeof(char));
 			//strcpy(argv[i+argix], arg.we_wordv[i]);
 		}
 
@@ -2127,7 +2177,7 @@ char *get_commandline(FILE *f, char *buffer) {
 		}
 		else {
 			ctrld = 0;
-			buffer = (char *)realloc(buffer, strlen(buffer) + strlen(cl) + 1);
+			buffer = (char *)reallocate(buffer, strlen(buffer) + strlen(cl) + 1);
 			strcat(buffer, cl);
 			Free(cl);
 			cl = 0;
@@ -2577,7 +2627,7 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 	// Stick all the s-expressions in one spot
 	for (Sexp = argv; *Sexp; Sexp++) {
 		k += strlen(*Sexp);
-		sline = (char *)realloc(sline, (strlen(sline) + strlen(*Sexp) + k + 3) * sizeof(char));
+		sline = (char *)reallocate(sline, (strlen(sline) + strlen(*Sexp) + k + 3) * sizeof(char));
 		
 		if (Sexp != argv) strcat(sline, " "); // insert a space if it isn't the first one
 		strcat(sline,*Sexp);
@@ -2614,7 +2664,17 @@ int scm_func(char **argv, int in, int out, int err, int shut_output, int shut_er
 
 		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
 			if (q && *q) {
-				write(out,q,strlen(q));
+				int nq = strlen(q);
+				write(out,q,nq);
+				if (!r) {
+					r = (char *)reallocate(r,(nq + 1)*sizeof(char));
+					strcpy(r,q);
+				}
+				else {
+					r = (char *)reallocate(r,(strlen(r) + nq + 1)*sizeof(char));
+					strcat(r, q);
+				}
+
 				k++;
 			}
 			Free(q);
@@ -2680,8 +2740,12 @@ int scm1_func(char **argv, int in, int out, int err, int shut_output, int shut_e
 		return -1;
 	}
 	
-	if (!strncmp(argv[0],"()", 2)) {
-		// empty function application -- there really ought to be something good we could do...
+	sline = strdup("");
+
+	// Stick all the s-expressions in one spot
+	for (Sexp = argv; *Sexp; Sexp++) {
+		k += strlen(*Sexp);
+		sline = (char *)reallocate(sline, (strlen(sline) + strlen(*Sexp) + k + 3) * sizeof(char));
 		
 		sexp_gc_release2(ctx);
 		return -1;
@@ -2713,19 +2777,17 @@ int scm1_func(char **argv, int in, int out, int err, int shut_output, int shut_e
 			if (segment) {
 				k = strlen(segment);
 
-//			fprintf(stderr,"argv[%d] = %s ==> [%s]\n",i, argv[i],segment);
-
-				if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON) && k > 0) {
-					strcat(line," ");
-
-					line = (char *)realloc(line, n + k + 3);
-					strcat(line, segment);
-					n = strlen(line);
-					Free(segment);
+		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
+			if (q && *q) {
+				int nq = strlen(q);
+				write(out,q,nq);
+				if (!r) {
+					r = (char *)reallocate(r,(nq + 1)*sizeof(char));
+					strcpy(r,q);
 				}
-				else if (sexp_exceptionp(ERRCON)) {
-					fprintf(stderr,"Exception raised by %s\n", argv[i]);
-					ERRCON = SEXP_TRUE;
+				else {
+					r = (char *)reallocate(r,(strlen(r) + nq + 1)*sizeof(char));
+					strcat(r, q);
 				}
 			}
 		}
