@@ -1,6 +1,18 @@
+
 ;;(define verbose-csupport #f)
 
 ;;(if verbose-csupport (display "Importing csupport\n"))
+
+(define-syntax define-syntax-rule
+  (syntax-rules ()
+    ((define-syntax-rule (name . pattern) template)
+     (define-syntax name
+       (syntax-rules ()
+         ((name . pattern) template))))))
+
+
+
+
 
 (define esc (make-string 1 #\x1b)) ;; hex character representation works in chibi, gsi * guile
 
@@ -60,6 +72,34 @@
 	 )
 )
 		
+
+
+
+(define (with-pipe-between lmb1 lmb2)
+  (let ((oci (current-input-port))	
+		  (oco (current-output-port))
+		  )
+	 (let* ((pipe (open-pipe))
+			  (in (open-input-file-descriptor (car pipe)))
+			  (out (open-output-file-descriptor (cadr pipe)))
+			  )
+		(with-output-to-port out lmb1)
+		(close-output-port out)
+		(with-input-from-port in lmb2)
+		(close-input-port in))
+	 (current-input-port oci)
+	 (current-output-port oco)))
+
+  ;;(current-input-port (open-input-file-descriptor 0))
+  ;;(current-output-port (open-output-file-descriptor 1))
+
+
+;;(with-pipe-between (lambda () (display '(1 2 3 4 5))) (lambda () (apply + (read-all))))
+
+
+
+
+
 
 (define list-ref
   (letrec ((%list-ref list-ref))
@@ -154,6 +194,18 @@
 	 (cons (car lst) (filter pred (cdr lst)))) 
 	(else (filter pred (cdr lst)))))
 
+(define (prune-quotes x)
+			(let ((xl (string->list x)))
+			  (if (and (> (length xl) 2)
+						  (char=? (car xl) #\")
+						  (char=? (car (reverse xl))) #\")
+					(substring x 1 (- (string-length x) 1))
+					x)))
+
+(define (prune-quotes-in-list x)
+    (map prune-quotes x))
+					
+  
 (define (read-all)
   (define (*read-all*)
 	 (let loop ((lst '())
@@ -168,21 +220,7 @@
 	 rtn
 	 ))
   
-
-(define (prune-quotes x)
-			(let ((xl (string->list x)))
-			  (if (and (> (length xl) 2)
-						  (char=? (car xl) #\")
-						  (char=? (car (reverse xl))) #\")
-					(substring x 1 (- (string-length x) 1))
-					x)))
-
-(define (prune-quotes-in-list x)
-    (map prune-quotes x))
-					
-  
 (define pipe-input read-all)
-
 
 (define (read-all-lines)
   (filter pair? 
@@ -194,6 +232,9 @@
 						 (reverse lst)
 						 (loop (cons (read-line) lst))))))
 			 ))
+
+
+
 
 
 (define (show . args)
@@ -343,48 +384,48 @@
 		  ""
 		  (substring str 1 (- n 1)))))
 
-(define igor-symbol-alist
-  '(
-	 ("(" . start_fence)
-	 (")" . end_fence)
-	 ("\\" . escape)
-	 ("'" . squote)
-	 ("\"" . dquote)
-	 ("`" . bquote)
-	 ("'(" . quotedlist)
-	 ("<<" . heredoc)
-	 ("&&" . andsep)
-	 ("||" . orsep)
-	 ("+>>&" . stdouterrapp)
-	 (">>&" . stderrapp)
-	 (">>" . stdoutapp)
-	 ("+|&" . outerrpipe)
-	 ("|&" . errpipe)
-	 ("|" . outpipe)
-	 ("+>&" . stdouterredir)
-	 (">&" . stderredir)
-	 (">" . stdoutredir)
-	 ("<" . stdinredir)
-	 ("&" . makebg)
-	 (";" . nextsep)
-	 ("{" . begblock)
-	 ("}" . endblock)
-	 ("$(" . shellcmd)
-	 ("${" . varexpr)
-	 ("#" . comment)
-	 ("\\" . continuation_str)
-;	 (",@(" . scmunquotesplicelst)
-;	 (",(" . scmunquotelst)
-;	 (",@" . scmunquotesplice)
-;	 ("," . scmunquote)
-	 )
-)
+;;; (define igor-symbol-alist
+;;;   '(
+;;; 	 ("(" . start_fence)
+;;; 	 (")" . end_fence)
+;;; 	 ("\\" . escape)
+;;; 	 ("'" . squote)
+;;; 	 ("\"" . dquote)
+;;; 	 ("`" . bquote)
+;;; 	 ("'(" . quotedlist)
+;;; 	 ("<<" . heredoc)
+;;; 	 ("&&" . andsep)
+;;; 	 ("||" . orsep)
+;;; 	 ("+>>&" . stdouterrapp)
+;;; 	 (">>&" . stderrapp)
+;;; 	 (">>" . stdoutapp)
+;;; 	 ("+|&" . outerrpipe)
+;;; 	 ("|&" . errpipe)
+;;; 	 ("|" . outpipe)
+;;; 	 ("+>&" . stdouterredir)
+;;; 	 (">&" . stderredir)
+;;; 	 (">" . stdoutredir)
+;;; 	 ("<" . stdinredir)
+;;; 	 ("&" . makebg)
+;;; 	 (";" . nextsep)
+;;; 	 ("{" . begblock)
+;;; 	 ("}" . endblock)
+;;; 	 ("$(" . shellcmd)
+;;; 	 ("${" . varexpr)
+;;; 	 ("#" . comment)
+;;; 	 ("\\" . continuation_str)
+;;; ;	 (",@(" . scmunquotesplicelst)
+;;; ;	 (",(" . scmunquotelst)
+;;; ;	 (",@" . scmunquotesplice)
+;;; ;	 ("," . scmunquote)
+;;; 	 )
+;;; )
 
-;;(define paren-fence-alist '(("(" . ")") ))
-;;(define bracket-fence-alist '(("(" . ")") ("[" . "]") ))
-;;(define brace-fence-alist '(("(" . ")") ("[" . "]") ("{" . "}")))
-;;(define quote-fence-alist '(("\"") ("'") ("`")))
-;;(define igor-token-list (list-tail (map car igor-symbol-alist) 7))
+;;; (define paren-fence-alist '(("(" . ")") ))
+;;; (define bracket-fence-alist '(("(" . ")") ("[" . "]") ))
+;;; (define brace-fence-alist '(("(" . ")") ("[" . "]") ("{" . "}")))
+;;; (define quote-fence-alist '(("\"") ("'") ("`")))
+;;; (define igor-token-list (list-tail (map car igor-symbol-alist) 7))
 
 	;;; ;;; char escape = '\\';
 	;;; ;;; char squote = '\'';
@@ -475,7 +516,7 @@
 						)
 		  (let ((n (if (string? sstr) (string-length sstr) #f)))
 
-			 (display "collected ") (write results)(newline)
+			 ;(display "collected ") (write results)(newline)
 
 			 (if (or (not sstr) (string=? sstr ""))
 				  (reverse results)
@@ -490,7 +531,7 @@
 						  (cc (if (string=? sstr "") "" (string-car sstr)))
 						  )
 					 
-					 (if (pair? mt) (begin (display "MT ")(write mt)(newline)))
+					 ;(if (pair? mt) (begin (display "MT ")(write mt)(newline)))
 
 					 ;; mt will either be null, or its head will be the first match for the head of the string
 					 (cond
@@ -701,12 +742,60 @@
 	(#t (*cross* (car args) (apply *cross* (cdr args))))))
 
 
-(define (system . args)
-  (if (null? args)
-		#f
-		(execute (expand-path (car args)) args)))
 
-(define (call string)
+
+
+(define (call bg . args)
+  (if (or (not (boolean? bg)) (null? args))
+		#f
+		(let ((in (duplicate-file-descriptor 0))
+				(out (duplicate-file-descriptor 1))
+				(err (duplicate-file-descriptor 2))
+				)
+		  
+		  (let ((pid (fork)))
+			 (cond
+			  ((< pid 0) #f)
+			  ((> pid 0) ;; parent
+				(close-file-descriptor in)
+				(close-file-descriptor out)
+				(close-file-descriptor err)
+
+				(if (not bg)
+					 (waitpid pid 0)
+					 )
+				0)
+			  (#t ;; child
+				(let ((sigint (set-signal-action! signal/interrupt #t))
+						(sigquit (set-signal-action! signal/quit #t))
+						(sigterm (set-signal-action! signal/term #t))
+
+;;;(current-input-port (open-input-file-descriptor 0))
+;;;(current-output-port (open-output-file-descriptor 1))
+						(r #f)
+						)
+
+				  (current-input-port (open-input-file-descriptor in))
+				  (current-output-port (open-output-file-descriptor out))
+				  (current-error-port (open-output-file-descriptor err))
+
+				  (display (expand-path (car args))) (display ": ") (display args) (newline)
+
+				  (set! r (execute (expand-path (car args)) args))
+				  
+				  (set-signal-action! signal/interrupt sigint)
+				  (set-signal-action! signal/quit sigquit)
+				  (set-signal-action! signal/term sigterm)
+				  r
+				  )
+				)
+			  )
+			 )
+		  )
+		)
+  ) 
+
+(define (system string)
   (let* ((args (collapsing-strtok string))
 			(arg1 (word-expand (car args)))	
 			)
@@ -719,7 +808,7 @@
 			 #f)
 		  (begin
 			 (set-car! args (car arg1))
-			 (apply system args)))))
+			 (apply call (cons #f args))))))
 
 
 ;;(define (make-file-stat)
@@ -736,18 +825,13 @@
 ;;		  #f)))
 
 
-
-
-
-
-
 (define *igor-report-backgrounding* #f)
 (define *igor-builtin-list* '())
 
 (define (*add-builtin* name function)
   (if (not (string? name))
 		(begin
-		  (display "The name of the builtin needs to be a string!\n")
+		  ;(display "The name of the builtin needs to be a string!\n")
 		  #f)
 		(let ((present (assoc name *igor-builtin-list*)))
 		  (if (not present)
@@ -757,159 +841,163 @@
 (*add-builtin* "add-builtin" *add-builtin*)
 
 
-(define (*igor-execute-builtin-process* in-the-background func argv-list input-port output-port error-port)
-  (if (string? func)
-		(cond
-		 ((procedure? func)
-		  (apply func argv-list))
-		 ((and (string? func) (string=? func "exit"))
-		  'EXIT)
-		 ((string? func)
-		  (display func)
-		  (display ": ")
-		  (display argv-list)
-		  (newline))
-		 (else #t))
-		(apply (string->symbol func) argv-list)
-		) )
+
+;;; (define (*igor-execute-builtin-process* in-the-background func argv-list input-port output-port error-port)
+;;;   (if (string? func)
+;;; 		(cond
+;;; 		 ((procedure? func)
+;;; 		  (apply func argv-list))
+;;; 		 ((and (string? func) (string=? func "exit"))
+;;; 		  'EXIT)
+;;; 		 ((string? func)
+;;; 		  ;(display func)
+;;; 		  ;(display ": ")
+;;; 		  ;(display argv-list)
+;;; 		  ;(newline)
+;;; 		  )
+;;; 		 (else #t))
+;;; 		(apply (string->symbol func) argv-list)
+;;; 		) )
 
 
-;; This will execute the command "cmd-string", passing the arguments in argv-list.  Does backgrounding and redirections
-(define (*igor-execute-single-process* in-the-background cmd-string argv-list input-port output-port error-port)
-  (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
-  (if (or (not (string? cmd-string)) (zero? (string-length cmd-string)))
-		(begin 
-		  (display "Something not quite right.\n" error-port)
-		  -1)
+;;; ;; This will execute the command "cmd-string", passing the arguments in argv-list.  Does backgrounding and redirections
+;;; (define (*igor-execute-single-process* in-the-background cmd-string argv-list input-port output-port error-port)
+;;;   (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
+;;;   (if (or (not (string? cmd-string)) (zero? (string-length cmd-string)))
+;;; 		(begin 
+;;; 		  ;(display "Something not quite right.\n" error-port)
+;;; 		  -1)
 
-		(let ((procid #f)
-				)
-		  (cond
-			((> procid 0) ;; parent
-			 (if (not in-the-background)
-				  (waitpid procid 0)
-				  (if *igor-report-backgrounding* (display (string-append "[started background process: " cmd-string) (current-error-port)))
-				  )
-			 (if (not (equal? input-port (current-input-port)))
-				  (close-input-port input-port))
+;;; 		(let ((procid #f)
+;;; 				)
+;;; 		  (cond
+;;; 			((> procid 0) ;; parent
+;;; 			 (if (not in-the-background)
+;;; 				  (waitpid procid 0)
+;;; 				  (or #t
+;;; 						;(if *igor-report-backgrounding* (display (string-append "[started background process: " cmd-string) (current-error-port)))
+;;; 						)
+;;; 				  )
+;;; 			 (if (not (equal? input-port (current-input-port)))
+;;; 				  (close-input-port input-port))
 			 
-			 (if (not (equal? output-port (current-output-port)))
-				  (close-output-port output-port))
+;;; 			 (if (not (equal? output-port (current-output-port)))
+;;; 				  (close-output-port output-port))
 			 
-			 (if (not (equal? error-port (current-error-port)))
-				  (close-output-port error-port))
-			 'ok
-			 )
-			((zero? procid) ;; child
-			 (let ((sigint (set-signal-action! signal/interrupt #t))
-					 (sigquit (set-signal-action! signal/quit #t))
-					 (sigterm (set-signal-action! signal/term #t)))
+;;; 			 (if (not (equal? error-port (current-error-port)))
+;;; 				  (close-output-port error-port))
+;;; 			 'ok
+;;; 			 )
+;;; 			((zero? procid) ;; child
+;;; 			 (let ((sigint (set-signal-action! signal/interrupt #t))
+;;; 					 (sigquit (set-signal-action! signal/quit #t))
+;;; 					 (sigterm (set-signal-action! signal/term #t)))
 
-				(with-io-ports input-port output-port error-port 
-									(lambda () 
-									  (execute (expand-path cmd-string) argv-list)))
+;;; 				(with-io-ports input-port output-port error-port 
+;;; 									(lambda () 
+;;; 									  (execute (expand-path cmd-string) argv-list)))
 				
-				(set-signal-action! signal/interrupt sigint)
-				(set-signal-action! signal/quit sigquit)
-				(set-signal-action! signal/term sigterm)
-				)
-			 )
-			(else
-			 (display (string-append "Failed to fork for " cmd-string) (current-error-port))
-			 -4
-			 )
-			)
-		  )	
-		)
-  )
+;;; 				(set-signal-action! signal/interrupt sigint)
+;;; 				(set-signal-action! signal/quit sigquit)
+;;; 				(set-signal-action! signal/term sigterm)
+;;; 				)
+;;; 			 )
+;;; 			(else
+;;; 			 ;;(display (string-append "Failed to fork for " cmd-string) (current-error-port))
+;;; 			 -4
+;;; 			 )
+;;; 			)
+;;; 		  )	
+;;; 		)
+;;;   )
 		  
 			 
-;(define igor-execute-single-process *igor-execute-single-process*)
-(define (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
-  (if #t -1	
-		(begin
-		  (display (string-append "** " (if in-the-background "[bg]" "") " " cmd-string))
-		  (for-each (lambda (x) (display " ") (display x)) argv-list)
-		  (newline)
-		  -1))
-  )
+;;; ;(define igor-execute-single-process *igor-execute-single-process*)
+;;; (define (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
+;;;   (if #t -1	
+;;; 		(begin
+;;; 		  ;;(display (string-append "** " (if in-the-background "[bg]" "") " " cmd-string))
+;;; 		  (for-each (lambda (x) (display " ") (display x)) argv-list)
+;;; 		  (newline)
+;;; 		  -1))
+;;;   )
 
-(define (process-token-list arglist inp outp errp)
-  "Not working yet"
-  (let ((set-bg! (lambda (cc x) (list-set! cc x 0)))
-		  (set-inp! (lambda (cc x) (list-set! cc x 1)))
-		  (set-outp! (lambda (cc x) (list-set! cc x 2)))
-		  (set-errp! (lambda (cc x) (list-set! cc x 3)))
-		  (set-cmd! (lambda (cc x) (list-set! cc x 3)))
-		  )
-	 (let loop ((rslt '())
-					(collecting-command '())
-					(argl arglist)
-					)
-		(cond
-		 ((null? argl) rslt)
-		 ((not (pair? argl)) 'process-token-list:bad-element-in-arglist)
+;;; (define (process-token-list arglist inp outp errp)
+;;;   "Not working yet"
+;;;   (let ((set-bg! (lambda (cc x) (list-set! cc x 0)))
+;;; 		  (set-inp! (lambda (cc x) (list-set! cc x 1)))
+;;; 		  (set-outp! (lambda (cc x) (list-set! cc x 2)))
+;;; 		  (set-errp! (lambda (cc x) (list-set! cc x 3)))
+;;; 		  (set-cmd! (lambda (cc x) (list-set! cc x 3)))
+;;; 		  )
+;;; 	 (let loop ((rslt '())
+;;; 					(collecting-command '())
+;;; 					(argl arglist)
+;;; 					)
+;;; 		(cond
+;;; 		 ((null? argl) rslt)
+;;; 		 ((not (pair? argl)) 'process-token-list:bad-element-in-arglist)
 
-		 ;; a command is a list (append (list bgp inp outp errp) cmdpath-or-name arguments)
-		 ;; where arguments is the argv (which includes the passed cmd)
-		 ((null? collecting-command)
-		  (list #f inp outp errp #f)) ;; the command is #f because it doesn't exist yet
+;;; 		 ;; a command is a list (append (list bgp inp outp errp) cmdpath-or-name arguments)
+;;; 		 ;; where arguments is the argv (which includes the passed cmd)
+;;; 		 ((null? collecting-command)
+;;; 		  (list #f inp outp errp #f)) ;; the command is #f because it doesn't exist yet
 
-		 ;; add a literal list
-		 ((and (string? (car argl)) (> (string-length (car argl)) 1) (string=? (substring (car argl) 0 2) "'("))
-		  (loop rslt 
-				  (if (not (list-ref collecting-command 4)) ;; not there yet
-						(append collecting-command (list (car argl) (car argl))) ;; add the literal list as the "command"
-						(append collecting-command (list (car argl)))) ;; just append the list as an argument
-				  (cdr argl)
-				  ))
+;;; 		 ;; add a literal list
+;;; 		 ((and (string? (car argl)) (> (string-length (car argl)) 1) (string=? (substring (car argl) 0 2) "'("))
+;;; 		  (loop rslt 
+;;; 				  (if (not (list-ref collecting-command 4)) ;; not there yet
+;;; 						(append collecting-command (list (car argl) (car argl))) ;; add the literal list as the "command"
+;;; 						(append collecting-command (list (car argl)))) ;; just append the list as an argument
+;;; 				  (cdr argl)
+;;; 				  ))
 		 
-		 ((equal? (car argl) 'heredoc)
-		  (display "Here documents are not supported yet\n" errp)
-		  'process-token-list:No-here-documents!
-		  )
-		 ((equal? (car argl) 'stdoutapp)
-		  )
-		 ((equal? (car argl) 'stderrapp)
-		  )
-		 ((equal? (car argl) 'stdouterrapp)
-		  )
-		 ((equal? (car argl) 'stdinredir)
-		  )
-		 ((equal? (car argl) 'stdoutredir)
-		  )
-		 ((equal? (car argl) 'stderredir)
-		  )
-		 ((equal? (car argl) 'stdouterredir)
-		  )
-		 ((equal? (car argl) 'outpipe)
-		  )
-		 ((equal? (car argl) 'errpipe)
-		  )
-		 ((equal? (car argl) 'outerrpipe)
-		  )
-		 ((equal? (car argl) 'makebg)
-		  )
-		 ((equal? (car argl) 'nextsep)
-		  )
-		 ((equal? (car argl) 'begblock)
-		  )
-		 ((equal? (car argl) 'endblock)
-		  )
-		 (else 
-		  (loop rslt 
-				  (let ((bit (word-expand (car argl))))
-					 (if bit
-						  (append collecting-command bit) ;; add the expansion
-						  (append collecting-command (list (car argl)))) ;; else add the work
-					 )
-				  (cdr argl)
-				  ))
+;;; 		 ((equal? (car argl) 'heredoc)
+;;; 		  (display "Here documents are not supported yet\n" errp)
+;;; 		  'process-token-list:No-here-documents!
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stdoutapp)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stderrapp)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stdouterrapp)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stdinredir)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stdoutredir)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stderredir)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'stdouterredir)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'outpipe)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'errpipe)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'outerrpipe)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'makebg)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'nextsep)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'begblock)
+;;; 		  )
+;;; 		 ((equal? (car argl) 'endblock)
+;;; 		  )
+;;; 		 (else 
+;;; 		  (loop rslt 
+;;; 				  (let ((bit (word-expand (car argl))))
+;;; 					 (if bit
+;;; 						  (append collecting-command bit) ;; add the expansion
+;;; 						  (append collecting-command (list (car argl)))) ;; else add the work
+;;; 					 )
+;;; 				  (cdr argl)
+;;; 				  ))
 		  
-		  )
-		)
-	 )
-  )
+;;; 		  )
+;;; 		)
+;;; 	 )
+;;;   )
 		
 		
 		

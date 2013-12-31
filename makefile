@@ -31,8 +31,11 @@ igor: igor.c local/csupport.sld local/csupport.$(SO)
 	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
 	chmod a+rx igor
 
+tester: tester.c local/csupport.sld local/csupport.$(SO)
+	gcc -ggdb -DDEBUGGING -Wall -o tester tester.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
+
 install:
-	sudo mv /bin/igor /tmp/igor
+	sudo mv /bin/igor /tmp/igor || true
 	sudo cp -p igor /bin/igor
 	sudo chown root.root /bin/igor 
 

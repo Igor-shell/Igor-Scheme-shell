@@ -27,12 +27,30 @@
 
 (c-include "external-support.c")
 
+;; (igor-read-line isfile inport prompt histfile)
+(define-c (maybe-null free string) 
+  (igor-read-line "igor_read_line") 
+  (boolean 
+	input-port 
+	(maybe-null string) 
+	(maybe-null string)))
+
+;; (igor-get-command-line isfile inport prompt cprompt rprompt histfile)
+(define-c (maybe-null free string) 
+  (igor-get-command-line "igor_get_commandline") 
+  (boolean 
+	input-port 
+	(maybe-null string) 
+	(maybe-null string) 
+	(maybe-null string) 
+	(maybe-null string)))
+
 ;;(define-c (maybe-null stat) (make-file-stat "make_file_stat") (void))
 ;;(define-c void (delete-file-stat "delete_file_stat") (stat))
 (define-c (maybe-null free stat) (file-stat "file_stat") (string))
 
 ;;(define-c int (system "system") (string))
-(define-c (array string null) (word-expand "wordexp_wrapper") (string))
+(define-c (maybe-null free array string null) (word-expand "wordexp_wrapper") (string))
 
 (define-c string (get-env "getenv") (string))
 (define-c int (set-env "setenv") (string string int))
@@ -48,3 +66,10 @@
 ;;(define-c void (read-from-terminal "linenoiseHistoryLoadClearScreen") (void))
 ;;(define-c void (set-multiline-term-read "linenoiseSetMultiLine") (int))
 
+;;; Local Variables:
+;;; mode: scheme
+;;; outline-regexp: ";-+"
+;;; comment-column:0
+;;; comment-start: ";;; "
+;;; comment-end:"" 
+;;; End:

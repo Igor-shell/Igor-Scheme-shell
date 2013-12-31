@@ -24,7 +24,7 @@ SO ?= so
 
 csupport.$(SO): csupport.stub external-support.c
 	chibi-ffi csupport.stub
-	gcc -fPIC -shared csupport.c -o csupport.$(SO) -lchibi-scheme
+	gcc -fPIC -shared csupport.c -o csupport.$(SO) -lchibi-scheme -lreadline -lhistory
 
 
 clean:
