@@ -1,0 +1,14 @@
+2014-01-02-14:00:40 -- Failed to evaluate [(display pork) hit an unopened output port]
+
+						  "(display pork)"
+						  ERROR in "write": invalid type, expected Output-Port: #<undef>
+						  igor: Exception raised [(display pork)]
+						  scm_func finished evaluating (display pork)
+						  You have mail, Thur. echo "(display pork) hit an unopened output port" >> BUGS
+						  "There was an error in:"
+						  "(display pork) hit an unopened output port"
+						  ERROR: bad set! syntax: (set! *last_igor_eval* (display pork) hit an unopened output port)
+
+
+  There are actually two bugs here; the first is the problem with the
+  output port, the second is that it tries to evaluate the eval'd thing.
