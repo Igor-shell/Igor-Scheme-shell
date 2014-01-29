@@ -12,3 +12,70 @@
 
   There are actually two bugs here; the first is the problem with the
   output port, the second is that it tries to evaluate the eval'd thing.
+
+
+2014-01-29-21:03:10 Problems with  ^c and ^\ not Doing The Right Thing.
+
+						  ls -1 | sort -r | tr aeiou AEIOU" does  not work -- the window just dies.
+						  Still have the memory leak associated with complete_path.
+
+
+										On Sat, Jan 25, 2014 at 1:31 AM, Alex Shinn <alexshinn@gmail.com> wrote:
+										> On Sat, Jan 25, 2014 at 7:55 AM, Ciprian Dorin Craciun
+										> <ciprian.craciun@gmail.com> wrote:
+										>>
+										>>     Hello all!
+										>>
+										>>     I'm trying to use Chibi's FFI generator to wrap a function that
+										>> has the following signature, and whose contract says that the `output`
+										>> should be `free`-ed by the caller.
+										>>
+										>>        bool spit_string (char * * output)
+										>>
+										>>     Thus I've defined the function as:
+										>>
+										>>        (define-c boolean spit_string ((result reference free string)))
+										>>
+										>>     However in the resulting C code (with Chibi 0.6.1), doesn't seem
+										>> to call any `free`.  In fact either with `free` type modifier, or
+										>> without, the resulting C code is identical.
+										>
+										>
+										> Unfortunately Chibi doesn't have a way to free C strings
+										> currently.  Chibi strings are actually offsets into bytevectors,
+										> which are defined as
+										>
+										>     struct {
+										>       sexp_uint_t length;
+										>       char data[];
+										>     } bytes;
+										>
+										> which means we need to copy C strings to be used in Chibi.
+
+										This is OK, I don't mind the cloning of the data.
+
+
+										> We could update chibi-ffi to free the C string immediately
+										> after we've copied it into Chibi.
+
+										Exactly.  This is what I would have expected after I've read the
+										documentation for the `free` modifier.  Because currently it leaks the
+										original string.
+
+
+										>>     Moreover replacing `string` with some `data` structure that I've
+										>>
+										>> previously defined, doesn't seem to change the situation.
+										>
+										>
+										> If you return a pointer with the "free" modifier, it should call
+										>
+										>   sexp_make_cpointer(ctx, type, ptr, SEXP_FALSE, 1)
+										>
+										> where the final "1" means to call the finalizer on gc
+										> collection, and where the default finalizer for a foreign
+										> pointer is "free".
+
+
+
+

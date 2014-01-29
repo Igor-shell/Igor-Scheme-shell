@@ -759,6 +759,11 @@ char *read_line(FILE *f, char *prompt_function) {
 			if (!history_file || !strcmp(history_file,"#f")) {
 				Free(history_file);
 			}
+			else if (!strcmp(history_file,"#t")) {
+				Free(history_file);
+				history_file = strdup(".igor.history");
+			}
+			else Free(history_file);
 		}
 		if (cmd && *cmd) {
 			add_history(cmd);
