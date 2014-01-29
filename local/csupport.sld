@@ -1,6 +1,7 @@
 
 (define-library (local csupport)
   (import (scheme base))
+  (import (scheme file))
   (import (scheme read))
   (import (scheme write))
   (import (chibi system))
@@ -12,6 +13,13 @@
   (import (srfi 98))
   
   (export 
+  
+  eval
+  load
+;  display-to-string
+;  write-to-string
+;  evaluate-scheme-expression
+
 ;  term-read history-add history-set-max-length history-save 
 ;  history-load read-from-terminal set-multiline-term-read
 	

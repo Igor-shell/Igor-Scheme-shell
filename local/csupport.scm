@@ -3,15 +3,15 @@
 
 ;;(if verbose-csupport (display "Importing csupport\n"))
 
-(define-syntax define-syntax-rule
-  (syntax-rules ()
-    ((define-syntax-rule (name . pattern) template)
-     (define-syntax name
-       (syntax-rules ()
-         ((name . pattern) template))))))
+;;(define-syntax define-syntax-rule
+;;  (syntax-rules ()
+;;    ((define-syntax-rule (name . pattern) template)
+;;     (define-syntax name
+;;       (syntax-rules ()
+;;         ((name . pattern) template))))))
 
 
-
+(define (dnl . args) (if (null? args) (display "") (let () (map display args) (newline))))
 
 
 (define esc (make-string 1 #\x1b)) ;; hex character representation works in chibi, gsi * guile
@@ -35,44 +35,106 @@
   (and (<= mn v) (<= v mx)))
 
 
-(define (file-status file . selector)
-  (if (null? selector) (set! selector '(name ino mode nlink uid gid size mtime ctime atime blksize blocks dev rdev)))
+;;;(define get-stat-dev #f) ;;/* ID of device containing file */
+;;;(define get-stat-ino #f) ;;/* inode number */
+;;;(define get-stat-mode #f) ;;/* protection */
+;;;(define get-stat-nlink #f) ;;/* number of hard links */
+;;;(define get-stat-uid #f) ;;/* user ID of owner */
+;;;(define get-stat-gid #f) ;;/* group ID of owner */
+;;;(define get-stat-rdev #f) ;;/* device ID (if special file) */
+;;;(define get-stat-size #f) ;;/* total size, in bytes */
+;;;(define get-stat-blksize #f) ;;/* blocksize for file system I/O */
+;;;(define get-stat-blocks #f) ;;/* number of 512B blocks allocated */
+;;;(define get-stat-atime #f) ;;/* time of last access */
+;;;(define get-stat-mtime #f) ;;/* time of last modification */
+;;;(define get-stat-ctime #f) ;;/* time of last status change */
 
-  (let* ((fs (file-stat file))
-		  (dev (get-stat-dev fs)) ;;/* ID of device containing file */
-		  (ino (get-stat-ino fs)) ;;/* inode number */
-		  (mode (get-stat-mode fs)) ;;/* protection */
-		  (nlink (get-stat-nlink fs)) ;;/* number of hard links */
-		  (uid (get-stat-uid fs)) ;;/* user ID of owner */
-		  (gid (get-stat-gid fs)) ;;/* group ID of owner */
-		  (rdev (get-stat-rdev fs)) ;;/* device ID (if special file) */
-		  (size (get-stat-size fs)) ;;/* total size, in bytes */
-		  (blksize (get-stat-blksize fs)) ;;/* blocksize for file system I/O */
-		  (blocks (get-stat-blocks fs)) ;;/* number of 512B blocks allocated */
-		  (atime (get-stat-atime fs)) ;;/* time of last access */
-		  (mtime (get-stat-mtime fs)) ;;/* time of last modification */
-		  (ctime (get-stat-ctime fs)) ;;/* time of last status change */
-		  )
-	 (let ((result '()))
-		(if (member 'name selector) (append result (list file)))
-		(if (member 'ino selector) (append result (list ino)))
-		(if (member 'mode selector) (append result (list mode)))
-		(if (member 'nlink selector) (append result (list nlink)))
-		(if (member 'uid selector) (append result (list uid)))
-		(if (member 'gid selector) (append result (list gid)))
-		(if (member 'size selector) (append result (list size)))
-		(if (member 'mtime selector) (append result (list mtime)))
-		(if (member 'ctime selector) (append result (list ctime)))
-		(if (member 'atime selector) (append result (list atime)))
-		(if (member 'blksize selector) (append result (list blksize)))
-		(if (member 'blocks selector) (append result (list blocks)))
-		(if (member 'dev selector) (append result (list dev)))
-		(if (member 'rdev selector) (append result (list rdev)))
-		result)
-	 )
-)
+(define file-status 
+  (let ((selectorlist (list 
+							  (list 'dev get-stat-dev) ;;/* ID of device containing file */
+							  (list "dev" get-stat-dev) ;;/* ID of device containing file */
+							  (list 'ino get-stat-ino) ;;/* inode number */
+							  (list "ino" get-stat-ino) ;;/* inode number */
+							  (list 'mode get-stat-mode) ;;/* protection */
+							  (list "mode" get-stat-mode) ;;/* protection */
+							  (list 'nlink get-stat-nlink) ;;/* number of hard links */
+							  (list "nlink" get-stat-nlink) ;;/* number of hard links */
+							  (list 'uid get-stat-uid) ;;/* user ID of owner */
+							  (list "uid" get-stat-uid) ;;/* user ID of owner */
+							  (list 'gid get-stat-gid) ;;/* group ID of owner */
+							  (list "gid" get-stat-gid) ;;/* group ID of owner */
+							  (list 'rdev get-stat-rdev) ;;/* device ID (if special file) */
+							  (list "rdev" get-stat-rdev) ;;/* device ID (if special file) */
+							  (list 'size get-stat-size) ;;/* total size, in bytes */
+							  (list "size" get-stat-size) ;;/* total size, in bytes */
+							  (list 'blksize get-stat-blksize) ;;/* blocksize for file system I/O */
+							  (list "blksize" get-stat-blksize) ;;/* blocksize for file system I/O */
+							  (list 'blocks get-stat-blocks) ;;/* number of 512B blocks allocated */
+							  (list "blocks" get-stat-blocks) ;;/* number of 512B blocks allocated */
+							  (list 'atime get-stat-atime) ;;/* time of last access */
+							  (list "atime" get-stat-atime) ;;/* time of last access */
+							  (list 'mtime get-stat-mtime) ;;/* time of last modification */
+							  (list "mtime" get-stat-mtime) ;;/* time of last modification */
+							  (list 'ctime get-stat-ctime) ;;/* time of last status change */
+							  (list "ctime" get-stat-ctime) ;;/* time of last status change */
+							  )))
+	 (lambda (file . selector)
+		(let ((fs (if (string? file) (file-stat file) file))
+				(select 
+				 (if (null? selector)
+					  (lambda x #f)
+					  (map (lambda (x) (if (procedure? x) x (let ((s (assq x selectorlist))) (if s (cdr s) #f)))))))
+				)
+		  (let ((result  (cond
+								((or (not file) (not selector) (null? selector)) #f)
+								((null? (cdr selector)) ;; single arg
+								 (select fs))
+								(map select fs))))
+			 (if (string? file) (delete-file-stat fs))
+			 result)))))
+
+
+
+
+
+
+;;; 							  (
+;;;   (if (null? selector) (set! selector '(name ino mode nlink uid gid size mtime ctime atime blksize blocks dev rdev)))
+
+;;;   (let ((fs (file-stat file))
+;;; 		  (let* ((dev (get-stat-dev fs)) ;;/* ID of device containing file */
+;;; 					(ino (get-stat-ino fs)) ;;/* inode number */
+;;; 					(mode (get-stat-mode fs)) ;;/* protection */
+;;; 					(nlink (get-stat-nlink fs)) ;;/* number of hard links */
+;;; 					(uid (get-stat-uid fs)) ;;/* user ID of owner */
+;;; 					(gid (get-stat-gid fs)) ;;/* group ID of owner */
+;;; 					(rdev (get-stat-rdev fs)) ;;/* device ID (if special file) */
+;;; 					(size (get-stat-size fs)) ;;/* total size, in bytes */
+;;; 					(blksize (get-stat-blksize fs)) ;;/* blocksize for file system I/O */
+;;; 					(blocks (get-stat-blocks fs)) ;;/* number of 512B blocks allocated */
+;;; 					(atime (get-stat-atime fs)) ;;/* time of last access */
+;;; 					(mtime (get-stat-mtime fs)) ;;/* time of last modification */
+;;; 					(ctime (get-stat-ctime fs)) ;;/* time of last status change */
+;;; 					)
+;;; 			 (let ((result '()))
+;;; 				(if (member 'name selector) (append result (list file)))
+;;; 				(if (member 'ino selector) (append result (list ino)))
+;;; 				(if (member 'mode selector) (append result (list mode)))
+;;; 				(if (member 'nlink selector) (append result (list nlink)))
+;;; 				(if (member 'uid selector) (append result (list uid)))
+;;; 				(if (member 'gid selector) (append result (list gid)))
+;;; 				(if (member 'size selector) (append result (list size)))
+;;; 				(if (member 'mtime selector) (append result (list mtime)))
+;;; 				(if (member 'ctime selector) (append result (list ctime)))
+;;; 				(if (member 'atime selector) (append result (list atime)))
+;;; 				(if (member 'blksize selector) (append result (list blksize)))
+;;; 				(if (member 'blocks selector) (append result (list blocks)))
+;;; 				(if (member 'dev selector) (append result (list dev)))
+;;; 				(if (member 'rdev selector) (append result (list rdev)))
+;;; 				result)
+;;; 			 )
+;;; )
 		
-
 
 
 (define (with-pipe-between lmb1 lmb2)
@@ -702,23 +764,27 @@
 
 ;; This resolves the programs in the path and allows you to use wildcards in the command 
 (define (*expand-path* file)
-  (filter file-exists? 
-			 (let ((l 
-					  (map word-expand 
-							 (map (lambda (x) 
-									  (string-append x "/" file )) 
-									(strtok (list->string (map (lambda (x) 
-																		  (if (equal? x (car (string->list ":"))) 
-																				(car (string->list " ")) x)) 
-																		(string->list (get-env "PATH"))))
-											  " ")))))
-				(if (> (length l) 1)
-					 (apply append l)
-					 l))))
+  (if (and #f (member (car (string->list file)) '( #\( #\" #\')))
+		file
+		(filter file-exists? 
+				  (let ((l 
+							(map word-expand 
+								  (map (lambda (x) 
+											(string-append x "/" file )) 
+										 (strtok (list->string (map (lambda (x) 
+																				(if (equal? x (car (string->list ":"))) 
+																					 (car (string->list " ")) x)) 
+																			 (string->list (get-env "PATH"))))
+													" ")))))
+					 (if (> (length l) 1)
+						  (apply append l)
+						  l)))))
 
 (define (expand-path file) 
-  (let ((ep (*expand-path* (if (symbol? file) (symbol->string file) file)))) (if (null? ep) #f (car ep))) )
-
+  (let* ((ep (*expand-path* (if (symbol? file) (symbol->string file) file)))
+			(result (if (null? ep) #f (car ep)))
+			)
+	 result))
 
 (define (cd . args) 
   (if (null? args) 
@@ -741,7 +807,36 @@
 	((= (length args) 2)	(apply *cross2* args))	
 	(#t (*cross* (car args) (apply *cross* (cdr args))))))
 
+(define (write-to-string sexpr) (let ((out (open-output-string))) (write sexpr out) (get-output-string out)))
+(define (display-to-string sexpr) (let ( (out (open-output-string))) (display sexpr out) (get-output-string out)))
 
+(define *eof* (let ((p (open-input-file "/dev/null"))) (let ((e (read p))) (close-port p) e)))
+
+
+(define (*evaluate-scheme-expression ctx sexpr env inputstring)
+  (let* ((stdin-list #f) (stdin #f))
+	 (cond 
+	  ((not inputstring)
+		(set! stdin (lambda x (display "You cannot use (stdin) or (stdin-list) without an input string\n")))
+		(set! stdin-list stdin))
+	  ((zero? (string-length inputstring))
+		(set! stdin (lambda x (display "You cannot use (stdin) or (stdin-list) without an input string\n")))
+		(set! stdin-list stdin))
+		)
+	 (let ((lst (collapsing-strtok inputstring)))
+		(set! stdin (lambda () (if (pair? lst) (let ((a (car lst)))(set! lst (cdr lst)) a) *eof*)))
+		(set! stdin-list (lambda () (if (pair? lst) (let ((a lst)) (set! lst *eof*) a) *eof*)))
+
+
+		(let* ((instr (if (null? inputstring) #f (open-input-string inputstring)))
+				 )
+		  (let loop ((sexpr (read instr))
+						 (result #f))
+			 (if (not (eof-object sexpr))
+				  (loop (read instr) (eval ctx result env))
+				  (write-to-string result)
+				))))
+	 ))
 
 
 

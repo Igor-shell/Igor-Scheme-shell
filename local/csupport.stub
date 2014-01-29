@@ -5,7 +5,6 @@
 ;;)
 					  
 
-
 (define-c-struct stat
 					  //constructor: make_file_stat
 					  finalizer: delete_file_stat
@@ -26,6 +25,8 @@
 )
 
 (c-include "external-support.c")
+
+;;(define-c sexp (eval "sexp_eval") (sexp sexp sexp))
 
 ;; (igor-read-line isfile inport prompt histfile)
 (define-c (maybe-null free string) 
@@ -51,6 +52,7 @@
 
 ;;(define-c int (system "system") (string))
 (define-c (maybe-null free array string null) (word-expand "wordexp_wrapper") (string))
+(define-c (void)  (delete-string-array "delete_wordexp_array") ((array string)) )
 
 (define-c string (get-env "getenv") (string))
 (define-c int (set-env "setenv") (string string int))

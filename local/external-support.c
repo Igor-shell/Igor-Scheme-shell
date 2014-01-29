@@ -31,6 +31,7 @@ struct stat *file_stat(char *filename) {
 	if (!fs) return NULL;
 
 	n = stat(filename, fs);
+	if  (n) free(fs);
 	return (n ? NULL : fs);
 }
 
@@ -53,8 +54,17 @@ char **wordexp_wrapper(char *str) {
 		//fprintf(stderr,"bad expansion for \"%s\"\n", str);
 		return calloc(1,sizeof(char *)); // Returning null just doesn't work.
 	}
-
 }
+
+void delete_wordexp_array(char  **wa) {
+	int i;
+	for (i = 0; wa && wa[i]; i++) {free(wa[i]); wa[i] = NULL;} // Just in case there is something pointing into wa
+	if (wa) free(wa);
+}
+
+
+
+
 
 
 char *igor_read_line(int isfile, FILE *f, char *prompt, char *history_file) {

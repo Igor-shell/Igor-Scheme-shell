@@ -30,9 +30,6 @@
   body)' which will be run as though they were programs w.r.t. stdin,
   stdout and stderr, but backgrounding is Just Too Hard at the moment.
 
-
-
-
   My initial impression concerning how we handle return values of
   scheme expressions versus output values is that as a part of a
   command, the s-expression is evaluated and its result replaces the
@@ -41,10 +38,6 @@
   used, and the return value is treated like a return value from a
   command (#f indicates a failure, anything else is ok).
   
-
-
-
-
 
 
   Pipes between scheme expressions and other things need to be handled
@@ -59,8 +52,6 @@
   shell.  Pipes into and out of a scheme expression then need to be
   mediated by reading from and writing to string ports which are then
   shunted appropriately.  This is a bugger of a problem.
-
-
 
 */
 
@@ -85,6 +76,11 @@
 //#define Dprintf(format, args...) printf(format, ##args) // debugging the tokenising
 //#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
 
+
+#define Note(s)
+#if !defined(Note)
+#define Note(s) fprintf(stderr,"%s:%d  %s\n", __FILE__, __LINE__, s)
+#endif
 
 #if !defined(Cprintf)
 #define Cprintf(format, args ...)
@@ -183,16 +179,18 @@ char *error_message = NULL;
 
 
 char *supporting_initialisation[] = {
+	"(import (chibi))",
 	"(import (scheme base))",
+	"(import (scheme file))",
 	"(import (chibi system))",      // user data & session stuff
 	"(import (chibi process))",     // signal handling, fork, execute...
 	"(import (chibi filesystem))",  // chdir, rmdir, dup2, open-pipe....
 	"(import (srfi 1))",            // list wrangling
 
-   //  "(import (srfi 6))",  // string ports
-   //  "(import (srfi 22))", // scheme scripts
-   //  "(import (srfi 23))", // (error ...)
-   //  "(import (srfi 62))", // Comment out s-expressions  using #; 
+   "(import (srfi 6))",  // string ports
+   //"(import (srfi 22))", // scheme scripts
+   //"(import (srfi 23))", // (error ...)
+   //"(import (srfi 62))", // Comment out s-expressions  using #; 
 	"(import (srfi 95))", // sorting and merging
 	"(import (srfi 98))", // access to environment variables
   
@@ -200,7 +198,7 @@ char *supporting_initialisation[] = {
 
 	"(import (local csupport))", // load the extra routines from csupport.stub/external-support.c
 
-	"(define *igor-prompt-for-continuation-string* \"\")",
+	"(define *igor-prompt-for-line-continuation-string* \"\")",
 	"(define *igor-history-file*  #f)",
 	"(define *igor-version*  \'" IGOR_VERSION ")",
 	"(define *running-script* 0)",
@@ -212,7 +210,8 @@ char *supporting_initialisation[] = {
 
 	// Functions
 	"(define (prompt . args) \"- \")",
-	"(define (continuation-prompt . args) \"--      \")",
+	"(define (unfinished-sexp-continuation-prompt . args) \"--      \")",
+	"(define (line-continuation-prompt . args) \"--      \")",
 	"(define (prompter strn . args) (string-append strn \" \"))",
 
 #if !defined(BOOTSTRAP)
@@ -277,7 +276,7 @@ char *shellcmd = "$(";
 char *varexpr = "${";
 char *comment = "#";
 
-char *continuation_str = "\\";
+char *line_continuation_str = "\\";
 
 char *scmunquotesplicelst = ",@(";
 char *scmunquotelst = ",(";
@@ -290,21 +289,30 @@ char *history_file = NULL;
 FILE *Stdin, *Stdout, *Stderr;
 int IN = 0, OUT = 1, ERR = 2;
 
+extern int is_sexp(char *s);
+extern int is_unfinished_sexp(char *s);
 
 #if defined(NewEvaluateSchemeExpression)
-char *evaluate_scheme_expression(char *sexp, char *instring);
-char *exit_val_evaluate_scheme_expression(char *sexp, char *instring);
+char *evaluate_scheme_expression(int emit, char *sexp, char *instring);
+char *exit_val_evaluate_scheme_expression(int emit, char *sexp, char *instring);
 #else
 char *evaluate_scheme_expression(char *sexp);
 char *exit_val_evaluate_scheme_expression(char *sexp);
 #endif
 
-void Abort(char *msg) {
-	fprintf(stderr,"Fatal error in igor: %s\n", msg);
+#define Abort(msg) Abort_i(msg,__FILE__, __LINE__)
+
+void Abort_i(char *msg, char *file, int line) {
+	fprintf(stderr,"Fatal error in igor: %s at %s:%d\n", msg, file,  line);
 	fflush(stderr);
 	abort();
 }
 
+#define DAbort(msg) DAbort_i(msg,__FILE__, __LINE__)
+void DAbort_i(char *msg, char *file, int line) {
+	fprintf(stderr,"Development message: ");
+	Abort_i(msg, file, line);
+}
 
 // The tokeniser and the parse routines use the same structure; lax, I know.
 typedef struct CMD_T {
@@ -361,7 +369,9 @@ int n_magic_strings = 0;
 
 #define errsize 81
 
-int report_error(int err, char *errormessage, const char *ctx) {
+
+#define report_error(err, errormessage, ctx) report_error_i(err, errormessage, ctx, __FILE__, __LINE__) 
+int report_error_i(int err, char *errormessage, const char *ctx, char *file, int line) {
 	char errname[errsize];
 	char *context = (char *)ctx;
 	
@@ -386,7 +396,9 @@ int report_error(int err, char *errormessage, const char *ctx) {
 int Close(int fd) {
 	if (fd >= 0) fd = close(fd);
 	else {
+#if defined(fussy_debugging)
 		abort();
+#endif
 		return EBADF;
 	}
 	return 0;
@@ -435,19 +447,39 @@ char *read_all(int fd) {
 }
 
 	
-char *completed_path(char *s) {
+char *completed_path(char *s) { // Don't free s, the calling routine needs to deal with it
+	sexp_gc_var1(expanded);
 	char *sexpr, *t;
 
 	if (s) {
 		if (*s == '/' || !strncmp(s,"./",2) || !strncmp(s,"../",3))  return strdup(s); // it is an absolute or relative reference
-		asprintf(&sexpr,"(expand-path \"%s\")", s);
+
+		if (is_sexp(s)) { 
 #if defined(NewEvaluateSchemeExpression)
-		t = evaluate_scheme_expression(sexpr,NULL);
+			t = evaluate_scheme_expression(0, s,NULL);
 #else
-		t = evaluate_scheme_expression(sexpr);
+			t = evaluate_scheme_expression(s);
 #endif
-		if (!strcmp(t,"#f") && access(t,F_OK) == Ok) return NULL;
-		else return t;
+		//	Free(s);
+		}
+		else {
+			t = s;
+		}
+
+		sexp_gc_preserve1(ctx, expanded);
+		//expanded = sexp_eval(ctx, sexp_list2(ctx,sexp_eval_string(ctx,"expand-path",-1,ENV),sexp_c_string(ctx,t,-1)), ENV);
+		expanded = sexp_apply(ctx, sexp_eval_string(ctx,"expand-path",-1,ENV), sexp_cons(ctx, sexp_c_string(ctx,s,-1), SEXP_NULL));		
+		sexpr = (sexp_stringp(expanded) ? strdup(sexp_string_data(expanded)) : NULL);
+
+		sexp_gc_release1(ctx);
+		//fprintf(stderr, ">>>>>> %s\n", sexpr);
+		//Free(t);
+
+		if (t && t != s) Free(t);
+
+
+		if (sexpr && !strcmp(sexpr,"#f") && access(sexpr,F_OK) == Ok) return NULL;
+		else return sexpr;
 	}
 	return NULL;
 }
@@ -644,12 +676,12 @@ void igor_set(sexp ctx, char *variable, char *value) {
 }
 
 void set_prompt_continuation(char *buffer) {
-	igor_set(ctx, "*igor-prompt-for-continuation-string*", buffer);
+	igor_set(ctx, "*igor-prompt-for-line-continuation-string*", buffer);
 }
 
 void free_prompt_continuation() {
 	//sexp_eval_string(ctx, "", -1, ENV);
-	igor_set(ctx, "*igor-prompt-for-continuation-string*", "");
+	igor_set(ctx, "*igor-prompt-for-line-continuation-string*", "");
 }
 
 char *read_line(FILE *f, char *prompt_function) {
@@ -660,14 +692,22 @@ char *read_line(FILE *f, char *prompt_function) {
 	static int k = -1;
 
 	if (!f && !running_script) {
+		char *prompt = NULL;
 		//char *prompt = strdup("Thur? ");
-#if defined(NewEvaluateSchemeExpression)
-		char *prompt = evaluate_scheme_expression(prompt_function,NULL);
-#else
-		char *prompt = evaluate_scheme_expression(prompt_function);
-#endif
-		if (!prompt) prompt = strdup("> ");
 
+		if (is_sexp(prompt_function)) {
+#if defined(NewEvaluateSchemeExpression)
+			prompt = evaluate_scheme_expression(1, prompt_function,NULL);
+#else
+			prompt = evaluate_scheme_expression(prompt_function);
+#endif
+			if (!prompt) prompt = "? ";
+
+		}
+		else {
+			if (prompt) prompt = strdup(prompt_function);
+			else prompt = strdup("> ");
+		}
 #if 0
 		if (prompt_function) {
 			fprintf(stderr,"prompt function: [");
@@ -712,7 +752,7 @@ char *read_line(FILE *f, char *prompt_function) {
 		if (!f) {
 			Free(history_file);			
 #if defined(NewEvaluateSchemeExpression)
-			history_file = evaluate_scheme_expression("*igor-history-file*",NULL);
+			history_file = evaluate_scheme_expression(1, "*igor-history-file*",NULL);
 #else
 			history_file = evaluate_scheme_expression("*igor-history-file*");
 #endif
@@ -779,7 +819,10 @@ char *excise_string(char *s, char *p, int n) {
 */
 char *insert_string(int n, char *s, char *p, char *insertion) {
 	char *tmp;
-	if (p < s) abort();
+
+#if 1 || defined(fussy_debugging) // This should stay here.
+	if (p < s) DAbort("Bad buffer pointer passed to insert_string");
+#endif
 	if (strlen(s) + strlen(insertion) + 1  > n) s = (char *)reallocate(s, strlen(s) + strlen(insertion) + 1);
 
 	tmp = strdup(p);
@@ -789,7 +832,41 @@ char *insert_string(int n, char *s, char *p, char *insertion) {
 	return s;
 }
 
-extern sexp execute_command_string(char *cmds);
+//extern sexp execute_command_string(char *cmds);
+sexp execute_command_string(char *cmds) {
+	char **tokenise_cmdline(char *cmdline);
+	cmd_t *process_token_list(char **Argv, int in, int out,int err);
+	void run_command_prologue(char *cmds, cmd_t *C);
+	void run_command_epilogue(char *cmds, cmd_t *C, sexp rv);
+	sexp run_commands(cmd_t *cmd);
+
+	char **argv = 0;
+	cmd_t *C = 0;
+
+	argv = tokenise_cmdline(cmds);
+
+	C = process_token_list(argv,0,1,2);
+			
+	// Call to run-command-prologue
+	run_command_prologue(cmds, C);
+
+	if (C) {
+		sexp rtv = SEXP_FALSE;
+		sexp_preserve_object(ctx, rtv);
+
+		rtv =  run_commands(C);
+
+	   // Call to run-command-epilogue (with return value)
+		run_command_epilogue(cmds, C, rtv);
+		
+
+		free_cmd(C);
+		Free(argv);
+
+		return rtv;
+	}
+	else return SEXP_NEG_ONE;
+}
 
 char *backquote_system_call(char *str) {
 	char *fname = NULL;
@@ -828,7 +905,7 @@ char *backquote_system_call(char *str) {
 	return NULL;
 }
 
-sexp check_exception (sexp ctx, sexp res, char *message, char *subject) { // from  repl.c in the chibi-scheme distribution by AlexShinn@gmail.com
+sexp check_exception (int emit, sexp ctx, sexp res, char *message, char *subject) { // from  repl.c in the chibi-scheme distribution by AlexShinn@gmail.com
 	
 	sexp_gc_var1(err);
 	sexp_gc_preserve1(ctx,err);
@@ -838,20 +915,22 @@ sexp check_exception (sexp ctx, sexp res, char *message, char *subject) { // fro
 	if (res && sexp_exceptionp(res)) {
 
 		err = sexp_current_error_port(ctx);
-		if (! sexp_oportp(err))
-			err = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
+		if (emit) {
+			if (! sexp_oportp(err))
+				err = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
 
-		if (message) {
-			sexp_write(ctx,sexp_c_string(ctx,message,-1), err);
-			sexp_newline(ctx,err);
-		}
-		if (subject) {
-			sexp_write(ctx,sexp_c_string(ctx,subject,-1), err);
-			sexp_newline(ctx,err);
-		}
+			if (message) {
+				sexp_write(ctx,sexp_c_string(ctx,message,-1), err);
+				sexp_newline(ctx,err);
+			}
+			if (subject) {
+				sexp_write(ctx,sexp_c_string(ctx,subject,-1), err);
+				sexp_newline(ctx,err);
+			}
 		 
-		sexp_print_exception(ctx, res, err);
-		sexp_stack_trace(ctx, err);
+			sexp_print_exception(ctx, res, err);
+			sexp_stack_trace(ctx, err);
+		}
       //exit_failure();
 		sexp_gc_release1(ctx);
   }
@@ -1013,7 +1092,7 @@ char *word_expand_string(char *s) {
 	s = strdup(s);
 
 	if (!*s) return s;
-
+	
 	err = wordexp(s, &arg, 0);
 	if (err) return s; 
 
@@ -1033,9 +1112,33 @@ char *word_expand_string(char *s) {
 	return r;
 }
 
-#if defined(NewEvaluateSchemeExpression) // New version
 /* This returns the output of the scheme expression */
-char *evaluate_scheme_expression(char *Sexpr,  char *inputstring) { // This returns an allocated string which ought to be freed (ultimately)
+
+sexp sexp_list3(sexp ctx, sexp a, sexp b, sexp c) {
+	sexp_gc_var1(res);
+	sexp_gc_preserve1(ctx,res);
+	res = sexp_cons(ctx, c, SEXP_NULL);
+	res = sexp_cons(ctx, b, res);
+	res = sexp_cons(ctx, a, res);
+	sexp_gc_release1(ctx);
+	return res;
+}
+
+
+sexp sexp_list4(sexp ctx, sexp a, sexp b, sexp c, sexp d) {
+	sexp_gc_var1(res);
+	sexp_gc_preserve1(ctx,res);
+	res = sexp_cons(ctx, d, SEXP_NULL);
+	res = sexp_cons(ctx, c, res);
+	res = sexp_cons(ctx, b, res);
+	res = sexp_cons(ctx, a, res);
+	sexp_gc_release1(ctx);
+	return res;
+}
+
+
+#if defined(NewEvaluateSchemeExpression) // New version
+char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { // This returns an allocated string which ought to be freed (ultimately)
 	char *sexpr = NULL;
 	begin {
 		char *psexpr = NULL;
@@ -1053,30 +1156,44 @@ char *evaluate_scheme_expression(char *Sexpr,  char *inputstring) { // This retu
 			paren_protection(psexpr, escape, 0);
 		}
 #endif			
+		//sexpr_s=tarts = "([{";
+		//sexpr_starts = "([";
+		const char *sexpr_starts = "(";
+
+		if (strchr(sexpr_starts, *Sexpr)) {
+			extern char *jump_sexp(char *, char escape);
+			char *t = jump_sexp(Sexpr, '\\');
+			if (t == Sexpr) {
+				report_error(0,"Bad s-expression",Sexpr);
+				return strdup(Sexpr);
+			}
+		}
+
+		//fprintf(stderr,"## %s ##  %d  %d\n", Sexpr, is_sexp(Sexpr), is_unfinished_sexp(Sexpr));
+		if (is_unfinished_sexp(Sexpr) || !is_sexp(Sexpr)) return strdup(Sexpr);
 
 		sexpr = guard_definitions(((run_word_expand && psexpr) ? psexpr : Sexpr));
 
 
-#define START_EVAL_BLOCK " " \
-			"(let ((output (open-output-string)) (rslt #f) (*last_igor_eval* #f))" \
-			"    (set! *last_igor_eval* %s)"						 \
-			"    (display *last_igor_eval* output)"			 \
-			"    (set! rslt (get-output-string output))"		 \
-			"    (close-output-port output) "				 
+//#define START_EVAL_BLOCK "   (let ((rslt #f)) (set! rslt (display-to-string %s))" 
+#define START_EVAL_BLOCK " " "  (let ((rslt (display-to-string %s)))" 
 
 #define END_EVAL_BLOCK ")"
 
+/*
 		if (!inputstring) {
+
+
 			asprintf(&wsexpr, 
 				"(let* ((stdin-list (lambda () (display \"You cannot use stdin or stdin-list without input!\n\") *eof*)) (stdin stdin-list))"
 				START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
-				sexpr);
+				);
 		}
 		else if (!*inputstring) {
 			asprintf(&wsexpr, 
 				"(let* ((stdin-list (lambda () *eof*)) (stdin stdin-list))"
 				START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
-				sexpr);
+				);
 		}
 		else {
 			asprintf(&wsexpr, 
@@ -1088,12 +1205,23 @@ char *evaluate_scheme_expression(char *Sexpr,  char *inputstring) { // This retu
 				inputstring, sexpr);
 		}
 
-		//fprintf(stderr,"\n[[ %s ]]\n", wsexpr);
+*/
 
-		result = check_exception(ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
+		asprintf(&wsexpr, 
+			START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
+			sexpr
+			);
+
+
+
+
+		//fprintf(stderr,"@@ %s @@\n", wsexpr);
+
+		result = check_exception(emit, ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
 
 		begin{
 			char *p =  (sexp_stringp(result) ? sexp_string_data(result) : NULL);
+
 			if (result == SEXP_VOID || result == SEXP_UNDEF 
 				|| (p && (!*p || !strcmp(p, "#<undef>") || !strcmp(p, "#<void>")))) {
 				rstr = strdup("");
@@ -1156,7 +1284,7 @@ char *evaluate_scheme_expression(char *Sexpr) { // This returns an allocated str
 			"  (set! rslt (get-output-string output))"
 			"  (close-output-port output) rslt)", sexpr);
 
-		result = check_exception(ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
+		result = check_exception(1 ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
 
 		begin{
 			char *p =  (sexp_stringp(result) ? sexp_string_data(result) : NULL);
@@ -1211,7 +1339,7 @@ char *evaluate_scheme_expression(char *Sexpr) { // This returns an allocated str
 
 		asprintf(&prefix, prefixfmt, scheme_exec_flags);
 
-		abort();
+		abort(); // This is in what will soon be relic code
 
 		if (!scheme_exec_flags) scheme_exec_flags = "";
 
@@ -1248,10 +1376,9 @@ char *evaluate_scheme_expression(char *Sexpr) { // This returns an allocated str
 }
 #endif
 
-
 #if defined(NewEvaluateSchemeExpression)
 /* This returns the output of the scheme expression */
-char *exit_val_evaluate_scheme_expression(char *sexpr, char *instring) { // This returns an allocated string which ought to be freed (ultimately)
+char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring) { // This returns an allocated string which ought to be freed (ultimately)
 #if defined(USES_GUILE)
 #error Not implemented yet
 #elif defined(USES_GAMBIT)
@@ -1329,7 +1456,7 @@ char *jump_sexp(char *s, char escape) {
 }	
 
 
-int is_sexp(char *s) {
+int starts_sexp(char *s) {
 	char *p = s;
 	for (; p && *p && isspace(*p); p++);
 	if (*p == '(') return 1;
@@ -1347,14 +1474,13 @@ char *sexpr_depth(char *buffer, char *str) {
 	int in_quote = 0;
 	char *p = 0;
 
-	if (!str) abort();
-
+	if (!str) DAbort("Bad 'str' pointer passed to sexpr_depth.");
 	
 	buffer = (char *) reallocate(buffer, strlen(str) + 3);
 	memset(buffer, 0, (strlen(str) + 3)*sizeof(char));
 
 	for (p = str; *p;) {
-		//printf("%c <==> %d:%s\n", *p, n,buffer);
+		//printf("%c <==> %d:%s | %s\n", *p, n,buffer, str);
 		if (!strcmp(p, "#\\\"")) p += 3; // skip a scheme literal double quote
 		else if (*p == '"') {
 			in_quote = !in_quote;
@@ -1364,6 +1490,7 @@ char *sexpr_depth(char *buffer, char *str) {
 			if (strchr(start_fence, *p)) {
 				buffer[n++] = *p++;
 				buffer[n] = 0; // probably superfluous
+				continue;
 			}
 			if (n <= 0 && strchr(end_fence, *p)) {
 				return buffer;
@@ -1386,6 +1513,25 @@ char *sexpr_depth(char *buffer, char *str) {
 		else Abort("Problem parsing an s-expression.  Something doesn't believe in the law of the excluded middle.");
 	}
 	return buffer;
+}
+
+
+int is_unfinished_sexp(char *s) {
+	return s && starts_sexp(s) && !is_sexp(s);
+}
+
+int is_sexp(char *s) {
+	char *parens = NULL;
+	int n = 0;
+
+	if (s && starts_sexp(s)) {
+		parens = sexpr_depth(parens, s);
+		if (parens) n = strlen(parens);
+		//fprintf(stderr,"--- %s | %s ---\n", s, parens);
+		Free(parens);
+		n = !n;
+	}
+	return n;
 }
 
 
@@ -1577,10 +1723,10 @@ char **tokenise_cmdline(char *cmdline) {
 					}
 
 					ssch = cp;
-					abort();
+					DAbort("Not splicing yet");
 					cp = jump_sexp(cp,sescape);
 					if (ssch == cp) {
-						abort();
+						DAbort("Whut?");
 					}
 					else {
 						strncat(collecting, sch, cp - sch);
@@ -1624,7 +1770,7 @@ char *handle_filename(char *s) {
 	if (*s == '(') { // Kludge!
 		if (is_sexp(s)) {
 #if defined(NewEvaluateSchemeExpression)
-			t = evaluate_scheme_expression(s,NULL);
+			t = evaluate_scheme_expression(0, s,NULL);
 #else
 			t = evaluate_scheme_expression(s);
 #endif
@@ -1695,8 +1841,8 @@ char **word_expansion(char **argv, int *argc, int argix) {
 	else {
 		int i;
 		argv = (char **)reallocate(argv,sizeof(char **) * (n+1));
-		for (i = *argc; i <= n; i++) argv[i] = 0;
-		if (!argv) abort();
+		for (i = *argc; i <= n && argv; i++) argv[i] = 0;
+		if (!argv) Abort("Out of memory: no argv!");
 
 		memmove(argv + argix + 1, argv + arg.we_wordc - 1, (*argc-argix)* sizeof(char *)); // ought to move the pointers appropriately
 		Free(argv[argix]);
@@ -1744,11 +1890,12 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 //	C->errport = errport;
 	
 	
+/*
 #warning ---------------------------------------------------------------
 #warning I need to convert bare scheme expressions to a fork and print that
 #warning we can use to pipe into other things or ... stuff.
 #warning ---------------------------------------------------------------
-
+*/
 
 	for (i = 0; Argv && i < Argc; i++) {
 		if (!Argv[i] || !Argv[i][0]) continue;
@@ -2273,7 +2420,7 @@ int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char
 			for (i = 1; argv[i]; i++) {
 				if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
 #if defined(NewEvaluateSchemeExpression)
-					char *ss = evaluate_scheme_expression(argv[i], NULL);  // These get cleaned up when the argv[] are freed
+					char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
 #else
 					char *ss = evaluate_scheme_expression(argv[i]);
 #endif
@@ -2404,7 +2551,7 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
 			for (i = 1; argv[i]; i++) {
 				if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
 #if defined(NewEvaluateSchemeExpression)
-					char *ss = evaluate_scheme_expression(argv[i], NULL);  // These get cleaned up when the argv[] are freed
+					char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
 #else
 					char *ss = evaluate_scheme_expression(argv[i]);
 #endif
@@ -2473,6 +2620,31 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
 }
 
 
+char *dispatch_scheme_stuff(cmd_t *cmd) {
+	// iterate through the argv[i] and execute them in order, capturing the output and appendiing it to the string which will be returned.
+	int i;
+	char *output = NULL;
+	
+	for  (i = 0; i < cmd->argc; i++) {
+		char *component = evaluate_scheme_expression(1, cmd->argv[i], NULL);
+		if (!output) {
+			output = component;
+		}
+		else if (component) {
+			output = (char *)realloc(output, strlen(output) + strlen(component) + 2);
+			strcat(output, " ");
+			strcat(output, component);
+			Free(component);
+		}
+		else Free(component);
+	}
+	return output;		
+}
+
+		
+
+
+
 sexp run_commands(cmd_t *cmd) {
 	//static sexp inp = SEXP_FALSE, outp = SEXP_FALSE, errp = SEXP_FALSE;
 	int n = 0;
@@ -2523,11 +2695,17 @@ sexp run_commands(cmd_t *cmd) {
 				sn = tn = sexp_make_integer(ctx,n);
 			}
 		}
-		else if (0 && cmd->run_scheme_expression) { // This is a scheme expression or set of expressions to be run in a separate 
+		else if (cmd->run_scheme_expression) { // This is a scheme expression or set of expressions to be run in a separate 
 			/**** WORKING HERE ****/
 			if (tcmd) Free(tcmd);
 			
-			printf("Scheme expression: %s ...\n", cmd->argv[0]);
+			begin {
+				char *s;
+				printf("Scheme expression: %s ...\n", cmd->argv[0]);
+				s = dispatch_scheme_stuff(cmd);
+				printf("  ==> %s\n",s);
+				Free(s);
+			}
 		}
 #if defined(ALLOW_NUMBERS_AS_NUMBERS) // Not really useful
 		int pass_numbers = 1;
@@ -2583,14 +2761,15 @@ char *first_non_space_char(char *s) {
 
 char *get_commandline(FILE *f, char *buffer) {
 	char *prompt;
-	char *cl;
+	char *current_line;
 	char *sdepth = NULL;
 	int depth = 0;
 	int collecting_s_exp = 0;
 	int ctrld = 0;
 
 	char *stdprompt = "(prompt)";
-	char *contprompt = "(prompt-for-continuation)";
+	char *contprompt = "(prompt-for-line-continuation)";
+	char *sexpcontprompt = "(prompt-for-sexp-continuation)";
 	char *remindprompt = "(prompter)";
 
 	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
@@ -2608,101 +2787,161 @@ char *get_commandline(FILE *f, char *buffer) {
 	}
 
 	for (;;) {
-		int cln = 0;
+		int current_line_len = 0;
 
-		cl = read_line(f, prompt);
-		if (cl) cln = strlen(cl);
-		
-		if (cln > 1 && cl[cln-1] == '\\' && cl[cln-2] != '\\') {
-			prompt = contprompt;
+		if (buffer && *buffer && is_unfinished_sexp(buffer)) {
+			prompt = sexpcontprompt;
 		}
 
-		if (cl && !*buffer) {
-			collecting_s_exp = is_sexp(cl);
-			sdepth = sexpr_depth(sdepth, cl);
+		current_line = read_line(f, prompt);
+		if (current_line) current_line_len = strlen(current_line);
+		
+		if ((current_line_len == 1 && *current_line == '\\') ||
+			(current_line_len > 1
+				&& current_line[current_line_len-1] == '\\'  // the last char is a backslash
+				&& current_line[current_line_len-2] != '\\') // and the second to last *isn't*
+			) {
+			prompt = contprompt;
+		}
+		
+		
+
+		//fprintf(stderr,"***** [%s: %s]  cse=%d  sdepth = %s depth = %d\n", prompt, current_line, collecting_s_exp, sdepth, depth);
+
+
+#warning the code for handling continued s-expressions is buggered.
+
+
+		Note("Top of loop: I've read the line and set the prompt");
+
+		if (current_line && !*buffer) {
+			Note("First entry in buffer");
+			collecting_s_exp = (is_sexp(current_line) || is_unfinished_sexp(current_line));
+			sdepth = sexpr_depth(sdepth, current_line);
 			if (sdepth) depth = strlen(sdepth);
 			else depth = 0;
 		}
 		
-		if (!cl && ctrld) {
+		if (!current_line && ctrld) { // must be a continuation some such
+			Note("control-d");
 			*buffer = 0;
 			Free(buffer);
 			buffer = NULL;
 			if (sdepth) Free(sdepth);
 			sdepth = 0;
+			Note("...exiting 1");
 			return NULL;
 		}
 
-		if (!cl) { // "control-d"
+		if (!current_line) { // "control-d" ...
 			if (!buffer || !*buffer) { // exit shell
+				Note("Exit");
 				*buffer = 0;
 				Free(buffer);
 				buffer = NULL;
 				if (sdepth) Free(sdepth);
 				sdepth = 0;
+				Note("...exiting 2");
 				return NULL;
 			}
 			else { // print buffer as prompt and continue editing
+				Note("print accumulated  buffer and continue");
 				ctrld++;
 				set_prompt_continuation(buffer);
 				prompt = remindprompt;
 				continue;
 			}
 		}
-		else if (!collecting_s_exp && !strcmp(cl, continuation_str)) { // blank continuation line
+		else if (!collecting_s_exp && !strcmp(current_line, line_continuation_str)) { // blank continuation line in a non-sexp
+			Note("Blank  continuation  line");
 			ctrld = 0;
-			Free(cl);
-			cl = 0;
+			Free(current_line);
+			current_line = 0;
 			set_prompt_continuation(buffer);
 			prompt = contprompt;
 			continue;
 		}
-		else if (!collecting_s_exp && !*cl) { // early exit -- we know we don't have to adjust "buffer"
-			Free(cl);
-			cl = 0;
+		else if (!collecting_s_exp && !*current_line) { // early exit -- we know we don't have to adjust "buffer"
+			Note("Early exit");
+			Free(current_line);
+			current_line = 0;
 			if (sdepth) Free(sdepth);
 			sdepth = 0;
 			free_prompt_continuation();
+			Note("...exiting");
 			return buffer;
 		}
-		else if (collecting_s_exp && !*cl) { // return to the top of the loop -- we know we don't have to adjust "buffer"
+		else if (collecting_s_exp && !*current_line && is_unfinished_sexp(buffer)) { // return to the top of the loop -- we know we don't have to adjust "buffer"
+			Note("Still collecting an unfinished s-expression");
 			ctrld = 0;
-			Free(cl);
-			cl = 0;
+			Free(current_line);
+			current_line = 0;
 			prompt = contprompt;
 			continue;
 		}
-		else {
+		else if (collecting_s_exp && *current_line && is_unfinished_sexp(buffer)) { // return to the top of the loop
 			ctrld = 0;
-			buffer = (char *)reallocate(buffer, strlen(buffer) + strlen(cl) + 1);
-			strcat(buffer, cl);
-			Free(cl);
-			cl = 0;
+			buffer = (char *)reallocate(buffer, strlen(buffer) + strlen(current_line) + 2);
+			strcat(buffer, " ");
+			strcat(buffer, current_line);
+			Free(current_line);
+			current_line = 0;
+
+			if (is_unfinished_sexp(buffer)) {
+				prompt = sexpcontprompt;
+			}
+			else {
+				prompt = prompt;
+				collecting_s_exp = 0;
+				if (sdepth) Free(sdepth);
+				sdepth = 0;
+				if (current_line) Free(current_line);
+				current_line = 0;
+				free_prompt_continuation();
+				Note("...exiting");
+				return buffer;
+				
+			}
+
+			continue;
+		}
+		else {
+			Note("... just do stuff");
+			ctrld = 0;
+			buffer = (char *)reallocate(buffer, strlen(buffer) + strlen(current_line) + 1);
+			strcat(buffer, current_line);
+			Free(current_line);
+			current_line = 0;
 		}
 
 		if (!collecting_s_exp) {
-			if (strcmp(buffer + strlen(buffer)-strlen(continuation_str), continuation_str)) {
+			Note("not collecting s-expression");
+			if (strcmp(buffer + strlen(buffer)-strlen(line_continuation_str), line_continuation_str)) {
+				Note("... continuation ...");
 				if (sdepth) Free(sdepth);
 				sdepth = 0;
-				if (cl) Free(cl);
-				cl = 0;
+				if (current_line) Free(current_line);
+				current_line = 0;
 				free_prompt_continuation();
+				Note("...exiting");
 				return buffer;
 		      // because it doesn't end with the continuation string....
 			}
 			else {
-				buffer[strlen(buffer)-strlen(continuation_str)] = 0;
+				buffer[strlen(buffer)-strlen(line_continuation_str)] = 0;
 			}
 		}
 		else { // we are collecting an s-expression, and we wont stop till we are done.
+			Note("collecting s-expression");
 			sdepth = sexpr_depth(sdepth, buffer);
 			depth = strlen(sdepth);
 			if (depth == 0) {
 				if (sdepth) Free(sdepth); 
-				if (cl) Free(cl);
+				if (current_line) Free(current_line);
 				sdepth = 0;
-				cl = 0;
+				current_line = 0;
 				free_prompt_continuation();
+				Note("...exiting");
 				return buffer;
 			}
 		}
@@ -2711,7 +2950,8 @@ char *get_commandline(FILE *f, char *buffer) {
 	}
 
 	if (sdepth) Free(sdepth);
-	if (cl) Free(cl);
+	if (current_line) Free(current_line);
+	Note("...exiting");
 	return NULL;
 }
 
@@ -2721,34 +2961,6 @@ void run_command_prologue(char *cmds, cmd_t *C) {
 void run_command_epilogue(char *cmds, cmd_t *C, sexp rv) {
 }
 
-sexp execute_command_string(char *cmds) {
-	char **argv = 0;
-	cmd_t *C = 0;
-
-	argv = tokenise_cmdline(cmds);
-
-	C = process_token_list(argv,0,1,2);
-			
-	// Call to run-command-prologue
-	run_command_prologue(cmds, C);
-
-	if (C) {
-		sexp rtv = SEXP_FALSE;
-		sexp_preserve_object(ctx, rtv);
-
-		rtv =  run_commands(C);
-
-	   // Call to run-command-epilogue (with return value)
-		run_command_epilogue(cmds, C, rtv);
-		
-
-		free_cmd(C);
-		Free(argv);
-
-		return rtv;
-	}
-	else return SEXP_NEG_ONE;
-}
 
 void update_internal_c_variables() {
 	char *s;
@@ -2862,7 +3074,34 @@ void catch_sigquit(int signum) {
 	return;
 }
 
-extern sexp run_source_file(char *);
+sexp run_source_file(char *filename) {
+	FILE *f = NULL;
+
+	if (access(filename, R_OK) == Ok) {
+		fprintf(stderr,"Found %s\n", filename);
+		
+		f = fopen(filename, "r");
+
+		//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
+
+		if (f) {
+			fprintf(stderr,"Executing commands from %s\n", filename);
+			command_loop(f);
+			fclose(f);
+			f = NULL;
+		}
+		else {
+			report_error(errno, "Failed to open source file", filename);
+			return SEXP_FALSE;
+		}
+	}
+	else {
+		report_error(errno, "Failed to open source file; Either it doesn't exist or it is not readable", filename);
+		return SEXP_FALSE;
+	}
+	return SEXP_TRUE;
+}
+
 
 sexp load_igor_rc(char *urc) {
 	static char *igoretcrc = "/etc/igor.rc";
@@ -2947,7 +3186,7 @@ sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 		for (i = 1; argv[i]; i++) {
 			if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
 #if defined(NewEvaluateSchemeExpression)
-				char *ss = evaluate_scheme_expression(argv[i], NULL); // These get cleaned up when argv[i] is freed
+				char *ss = evaluate_scheme_expression(1, argv[i], NULL); // These get cleaned up when argv[i] is freed
 #else
 				char *ss = evaluate_scheme_expression(argv[i]);
 #endif
@@ -2964,7 +3203,7 @@ sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 			setenv(argv[1], argv[2], 1);
 			asprintf(&cmd, "(define %s \"%s\")", argv[1], argv[2]);
 #if defined(NewEvaluateSchemeExpression)
-			if (cmd) ts = evaluate_scheme_expression(cmd, NULL);
+			if (cmd) ts = evaluate_scheme_expression(1, cmd, NULL);
 #else
 			if (cmd) ts = evaluate_scheme_expression(cmd);
 #endif
@@ -2976,7 +3215,7 @@ sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 			setenv(argv[1], "", 1);
 			asprintf(&cmd, "(define %s '())", argv[1]);
 #if defined(NewEvaluateSchemeExpression)
-			if (cmd) ts = evaluate_scheme_expression(cmd, NULL);
+			if (cmd) ts = evaluate_scheme_expression(1, cmd, NULL);
 #else
 			if (cmd) ts = evaluate_scheme_expression(cmd);
 #endif
@@ -3021,7 +3260,7 @@ sexp unset_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 		unsetenv(argv[i]);
 		asprintf(&cmd, "(define %s '())", argv[i]);
 #if defined(NewEvaluateSchemeExpression)
-		if (cmd) ts = evaluate_scheme_expression(cmd, NULL);
+		if (cmd) ts = evaluate_scheme_expression(1, cmd, NULL);
 #else
 		if (cmd) ts = evaluate_scheme_expression(cmd);
 #endif
@@ -3055,7 +3294,7 @@ sexp cd_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	for (i = 1; argv[i]; i++) {
 		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
 #if defined(NewEvaluateSchemeExpression)
-			char *ss = evaluate_scheme_expression(argv[i], NULL); // Freed when argv[i] is freed
+			char *ss = evaluate_scheme_expression(1, argv[i], NULL); // Freed when argv[i] is freed
 #else
 			char *ss = evaluate_scheme_expression(argv[i]);
 #endif
@@ -3109,34 +3348,6 @@ sexp cd_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	return SEXP_TRUE;
 }
 
-sexp run_source_file(char *filename) {
-	FILE *f = NULL;
-
-	if (access(filename, R_OK) == Ok) {
-		fprintf(stderr,"Found %s\n", filename);
-		
-		f = fopen(filename, "r");
-
-		//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
-
-		if (f) {
-			fprintf(stderr,"Executing commands from %s\n", filename);
-			command_loop(f);
-			fclose(f);
-			f = NULL;
-		}
-		else {
-			report_error(errno, "Failed to open source file", filename);
-			return SEXP_FALSE;
-		}
-	}
-	else {
-		report_error(errno, "Failed to open source file; Either it doesn't exist or it is not readable", filename);
-		return SEXP_FALSE;
-	}
-	return SEXP_TRUE;
-}
-
 // Process a "sourced" file
 sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	int i;
@@ -3144,7 +3355,7 @@ sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	for (i = 1; argv[i]; i++) {
 		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
 #if defined(NewEvaluateSchemeExpression)
-			char *ss = evaluate_scheme_expression(argv[i], NULL);
+			char *ss = evaluate_scheme_expression(1, argv[i], NULL);
 #else
 			char *ss = evaluate_scheme_expression(argv[i]);
 #endif
@@ -3167,12 +3378,13 @@ sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 }
 
 
+
 sexp sexp_get_procedure(sexp ctx, sexp env, char *procname) {
 	sexp_gc_var2(proc,tmp);
 	sexp_gc_preserve2(ctx,proc,tmp);
 
 	tmp = sexp_intern(ctx,procname,-1);
-	proc = sexp_env_ref(env,tmp,SEXP_FALSE);
+	proc = sexp_env_ref(ctx,env,tmp,SEXP_FALSE);
 	if (sexp_procedurep(proc))	sym = proc;
 	else sym = SEXP_FALSE;
 	sexp_gc_release2(ctx);
@@ -3215,7 +3427,7 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	sexp_gc_var3(result, inexpr, outexpr);
 	sexp_gc_preserve3(ctx, result, inexpr, outexpr);
 
-	fprintf(stderr,"Entering scm_func %s\n", *argv);
+   //fprintf(stderr,"Entering scm_func %s\n", *argv);
 
 	k = 0;
 	
@@ -3258,7 +3470,7 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 			char *ts = NULL;
 		// empty function application -- there really ought to be something good we could do...
 #if defined(NewEvaluateSchemeExpression)
-			ts = evaluate_scheme_expression("#t", inputstring); // Sets the ERRCON state appropriately
+			ts = evaluate_scheme_expression(1, "#t", inputstring); // Sets the ERRCON state appropriately
 #else
 			ts = evaluate_scheme_expression("#t"); // Sets the ERRCON state appropriately
 #endif
@@ -3267,13 +3479,15 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 		}
 		else {
 #if defined(NewEvaluateSchemeExpression)
-			q = evaluate_scheme_expression(p, inputstring); // Sets the ERRCON state appropriately
+			q = evaluate_scheme_expression(1, p, inputstring); // Sets the ERRCON state appropriately
 #else
 			q = evaluate_scheme_expression(p); // Sets the ERRCON state appropriately
 #endif
 		}
 		
-		result = sexp_eval_string(ctx,"*last_igor_eval*",-1,ENV);
+		fprintf(stderr,"*** loop %d: %s ## %s\n", k, q, s);
+
+		//result = sexp_eval_string(ctx,"*last_igor_eval*",-1,ENV);
 
 		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
 			if (q && *q) {
@@ -3293,22 +3507,23 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 			Free(q);
 		}
 		else if (sexp_exceptionp(ERRCON)) {
-			report_error(0,"Exception raised", p);
+			report_error(0,"Exception raised in scm_func", p);
 			ERRCON = SEXP_TRUE;
 		}
 		Free(p);
 	}
 
-	if (result != SEXP_UNDEF && result != SEXP_VOID && !sexp_exceptionp(result)) {
-		if (repl_write >= 0) {
-			write_sexp(ctx, result, repl_write);
+	if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
+		fprintf(stderr,"*** loop %d: %s\n", k, q);
+		if (repl_write >= 0 && q) {
+			write(out,q,strlen(q));
 			k++;
 		}
 	}
 
 	if (k > 0) write(out, "\n", 1);
 
-	fprintf(stderr,"scm_func finished evaluating %s\n", sline);
+	//fprintf(stderr,"scm_func finished evaluating %s\n", sline);
 	
 	Free(sline);
 
@@ -3384,7 +3599,7 @@ int scm_func_XXX(char **argv, int in, int out) {
 			char *ts = NULL;
 		// empty function application -- there really ought to be something good we could do...
 #if defined(NewEvaluateSchemeExpression)
-			ts = evaluate_scheme_expression("#t", NULL); // Sets the ERRCON state appropriately
+			ts = evaluate_scheme_expression(1, "#t", NULL); // Sets the ERRCON state appropriately
 #else
 			ts = evaluate_scheme_expression("#t"); // Sets the ERRCON state appropriately
 #endif
@@ -3393,7 +3608,7 @@ int scm_func_XXX(char **argv, int in, int out) {
 		}
 		else {
 #if defined(NewEvaluateSchemeExpression)
-			q = evaluate_scheme_expression(p, NULL);
+			q = evaluate_scheme_expression(1, p, NULL);
 #else
 			q = evaluate_scheme_expression(p);
 #endif
@@ -3633,7 +3848,7 @@ int igor(int argc, char **argv) {
 		Iprintf("Running interactive shell\n");
 		Free(history_file);
 #if defined(NewEvaluateSchemeExpression)
-		history_file = evaluate_scheme_expression("*igor-history-file*", NULL);
+		history_file = evaluate_scheme_expression(1, "*igor-history-file*", NULL);
 #else
 		history_file = evaluate_scheme_expression("*igor-history-file*");
 #endif
@@ -3644,7 +3859,6 @@ int igor(int argc, char **argv) {
 
 		if (history_file) write_history(history_file);
 	}
-
 
 	return 0;
 }
@@ -3686,6 +3900,8 @@ int main(int argc, char **argv) {
   sexp_intern(ctx,"*igor-swap-output-capture-port*", -1);
   
   sexp_eval_string(ctx,"(define *eof* (let ((p (open-input-file \"/dev/null\"))) (let ((e (read p))) (close-port p) e)))", -1, env);
+  sexp_eval_string(ctx,"(define (display-to-string sexpr) (let ( (out (open-output-string))) (display sexpr out) (get-output-string out))))", -1, env);
+  sexp_eval_string(ctx,"(define (write-to-string sexpr) (let ((out (open-output-string))) (write sexpr out) (get-output-string out))))", -1, env);
 
   for (ss = supporting_initialisation; ss && *ss; ss++) {
     res = sexp_eval_string(ctx,*ss, -1, env);
@@ -3694,12 +3910,12 @@ int main(int argc, char **argv) {
 
 #if defined(BOOTSTRAP)
   begin {
-	  if (access(BOOTSTRAP, R_OK) != Ok) {
-		  report_error(0,"Unable to load bootstrap file, aborting", BOOTSTRAP);
-		  exit(BUGGER);
+	  if (access(BOOTSTRAP, F_OK) == Ok) {
+		  if (access(BOOTSTRAP, R_OK) != Ok) {
+				  report_error(0,"Unable to load bootstrap file, aborting", BOOTSTRAP);
+		  }
+		  sexp_load(ctx,sexp_c_string(ctx,BOOTSTRAP,-1),ENV);
 	  }
-
-	  sexp_load(ctx,sexp_c_string(ctx,BOOTSTRAP,-1),ENV);
   }
 #endif
 
