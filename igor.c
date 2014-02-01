@@ -167,7 +167,7 @@ extern sexp argv_to_list(sexp ctx, char **argv, int len);
 sexp ctx, env, ERRCON = SEXP_FALSE;
 sexp sym;
 sexp igor_execute;
-sexp igor_history_file, current_input, current_output, current_error;
+sexp current_input, current_output, current_error;
 char *error_message = NULL;
 
 #define ENV env    // explicitly use the global environment
@@ -533,7 +533,6 @@ void close_up_shop() {
 	sexp_release_object(ctx,current_input);
 	sexp_release_object(ctx,current_output);
 	sexp_release_object(ctx,current_error);
-	sexp_release_object(ctx,igor_history_file);
 
 	sexp_destroy_context(ctx);
 }
@@ -684,6 +683,42 @@ void free_prompt_continuation() {
 	igor_set(ctx, "*igor-prompt-for-line-continuation-string*", "");
 }
 
+void refresh_history_filename() {
+	char *s = NULL;
+
+	Free(history_file);			
+
+#if defined(NewEvaluateSchemeExpression)
+	s = evaluate_scheme_expression(1, "(*igor-history-file*)",NULL);
+#else
+	s = evaluate_scheme_expression("(*igor-history-file*)");
+#endif
+
+
+	if (!s)  {
+#if defined(NewEvaluateSchemeExpression)
+		s = evaluate_scheme_expression(1, "(expand-path (*igor-history-file*))",NULL);
+#else
+		s = evaluate_scheme_expression("(expand-path (*igor-history-file*))");
+#endif
+	}
+
+	if (s && !strcmp(s,"#t")) {
+		Free(s);
+		Free(history_file);
+		history_file = strdup(".igor.history");
+	}
+	else if (!s || !strcmp(s,"#f")) {
+		Free(s);
+		history_file = NULL;
+	}
+	else {
+		Free(history_file);
+		history_file = s;
+	}
+}
+
+
 char *read_line(FILE *f, char *prompt_function) {
 	char *cmd;
 	static char *linebuffer = NULL;
@@ -750,20 +785,7 @@ char *read_line(FILE *f, char *prompt_function) {
 #endif
 
 		if (!f) {
-			Free(history_file);			
-#if defined(NewEvaluateSchemeExpression)
-			history_file = evaluate_scheme_expression(1, "*igor-history-file*",NULL);
-#else
-			history_file = evaluate_scheme_expression("*igor-history-file*");
-#endif
-			if (!history_file || !strcmp(history_file,"#f")) {
-				Free(history_file);
-			}
-			else if (!strcmp(history_file,"#t")) {
-				Free(history_file);
-				history_file = strdup(".igor.history");
-			}
-			else Free(history_file);
+			refresh_history_filename();
 		}
 		if (cmd && *cmd) {
 			add_history(cmd);
@@ -811,6 +833,8 @@ char *read_line(FILE *f, char *prompt_function) {
 
 	return cmd;
 }
+
+
 
 // s is the enclosing string, p is the start of the excision, n is the length of the excision
 char *excise_string(char *s, char *p, int n) {
@@ -3824,7 +3848,9 @@ int igor(int argc, char **argv) {
 	if (run_builtins) install_builtins();
 	if (run_rc) load_igor_rc(NULL); // first from /etc/igor.rc then ~/.igor.rc
 	
-	
+
+	refresh_history_filename();
+
 	for (i = 1; i < argc; i++) {
 		
    /* exec a command if -c */
@@ -3913,16 +3939,14 @@ int igor(int argc, char **argv) {
 			}
 		}
 	}
+
 	if (run_interactive_shell) {
 		Iprintf("Running interactive shell\n");
 		Free(history_file);
-#if defined(NewEvaluateSchemeExpression)
-		history_file = evaluate_scheme_expression(1, "*igor-history-file*", NULL);
-#else
-		history_file = evaluate_scheme_expression("*igor-history-file*");
-#endif
 
-		if (history_file && *history_file && strcmp(history_file,"#f")) read_history(history_file);
+		refresh_history_filename();
+
+		if (history_file && *history_file) read_history(history_file);
 
 		command_loop(NULL);
 
@@ -3955,14 +3979,13 @@ int main(int argc, char **argv) {
   sexp_preserve_object(ctx,current_input);
   sexp_preserve_object(ctx,current_output);
   sexp_preserve_object(ctx,current_error);
-  sexp_preserve_object(ctx,igor_history_file);
   sexp_preserve_object(ctx,res);
 
 
   sexp_load_standard_env(ctx, NULL, SEXP_SEVEN);
   sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 0);
 
-  sexp_intern(ctx,"*igor-history-file*", -1);
+//  sexp_intern(ctx,"*igor-history-file*", -1);
   sexp_intern(ctx,"*igor-input-source-port*", -1);
   sexp_intern(ctx,"*igor-output-capture-port*", -1);
   sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
