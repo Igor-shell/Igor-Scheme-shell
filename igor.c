@@ -2420,6 +2420,11 @@ int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char
 		adjust_fd(output,1);
 		adjust_fd(error,2);
 
+		Dprintf("Child (%s) about to exec\n",cmd);
+		signal(SIGINT, SIG_DFL);
+		signal(SIGQUIT, SIG_DFL);
+		signal(SIGTERM, SIG_DFL);
+		
 		if (1) {
 			int i;
 			for (i = 1; argv[i]; i++) {
@@ -2437,11 +2442,6 @@ int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char
 			}
 		}
 
-		Dprintf("Child (%s) about to exec\n",cmd);
-		signal(SIGINT, SIG_DFL);
-		signal(SIGQUIT, SIG_DFL);
-		signal(SIGTERM, SIG_DFL);
-		
 		begin {
 			char *tcmd = completed_path(cmd);
 			//char *tcmd = strdup(cmd);
@@ -2494,11 +2494,23 @@ int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char
 }
 
 
-int c_execute_single_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) {
+extern char *dispatch_scheme_stuff(cmd_t *cmd);
+
+//int c_execute_single_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) 
+int c_execute_single_process(cmd_t *command) {
 	int procid = -1;
+	char *ss = NULL;
+	char *cmd = *command->argv;
+	int in_the_background = command->bg;
+	char **argv = command->argv;
+	char *inputstring = command->inputstring;
+	int input = command->in;
+	int output = command->out;
+	int error = command->err;
+
+	char *returnstr = NULL;
 
 #if 0
-	char **ss;
 	fprintf(stderr,"C %s [", cmd);
 	for (ss = argv; *ss; ss++) {
 		if (ss == argv) fprintf(stderr,"%s", *ss);
@@ -2518,7 +2530,12 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
                        
 	ifewsxz (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
 
-	if (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
+
+	if (command->run_scheme_expression) {
+		returnstr = dispatch_scheme_stuff(command);
+	}
+
+
 	//time(&now);
 	procid = fork();
 
@@ -2551,72 +2568,83 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
 		adjust_fd(output,1);
 		adjust_fd(error,2);
 
-		if (1) {
-			int i;
-			for (i = 1; argv[i]; i++) {
-				if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
-#if defined(NewEvaluateSchemeExpression)
-					char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
-#else
-					char *ss = evaluate_scheme_expression(argv[i]);
-#endif
-					if (ss) {
-						free(argv[i]);
-						argv[i] = ss;
-					}
-				}
-			}
-		}
-
 		Dprintf("Child (%s) about to exec\n",cmd);
 		signal(SIGINT, SIG_DFL);
 		signal(SIGQUIT, SIG_DFL);
 		signal(SIGTERM, SIG_DFL);
 		
-		begin {
-			char *tcmd = completed_path(cmd);
+		if (!command->run_scheme_expression) {
+			if (1) {
+				int i;
+				for (i = 1; argv[i]; i++) {
+					if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+#if defined(NewEvaluateSchemeExpression)
+						char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
+#else
+						char *ss = evaluate_scheme_expression(argv[i]);
+#endif
+						if (ss) {
+							free(argv[i]);
+							argv[i] = ss;
+						}
+					}
+				}
+			}
+
+			begin {
+				char *tcmd = completed_path(cmd);
 			//char *tcmd = strdup(cmd);
 			//if (tcmd) fprintf(stderr,"%s (%d)\n", tcmd, access(tcmd, X_OK));
 
-			if (tcmd && access(tcmd, X_OK) == Ok) {
-				int q;
+				if (tcmd && access(tcmd, X_OK) == Ok) {
+					int q;
 				
-				for (q = 0; track_execv && argv && argv[q]; q++) {
-					if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
-					fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
-				}
+					for (q = 0; track_execv && argv && argv[q]; q++) {
+						if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
+						fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
+					}
 
-				if ((n = execv(tcmd, argv)) == -1) {
+					if ((n = execv(tcmd, argv)) == -1) {
 		            //time(&then);
-					report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
-				}
-				else {
+						report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
+					}
+					else {
 					//fprintf(stderr,"Goodo.\n");
 			         //time(&then);
 			         //proc_finished(procid, then);
-				}
-				free_null_terminated_pointer_array(argv);
-				Free(tcmd);
+					}
+					free_null_terminated_pointer_array(argv);
+					Free(tcmd);
 
-				close_up_shop();
-				exit(n); // if the process doesn't go, we need to dispatch it
-			}
-			else {
-				report_error(0,"Unable to execute program", argv[0]);
-				if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
+					close_up_shop();
+					exit(n); // if the process doesn't go, we need to dispatch it
+				}
 				else {
-					if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
-					else report_error(0,"The file was not found", cmd);
-				}
-				free_null_terminated_pointer_array(argv);
-				Free(tcmd);
+					report_error(0,"Unable to execute program", argv[0]);
+					if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
+					else {
+						if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
+						else report_error(0,"The file was not found", cmd);
+					}
+					free_null_terminated_pointer_array(argv);
+					Free(tcmd);
 
-				close_up_shop();
-				exit(ENOENT);
+					close_up_shop();
+					exit(ENOENT);
+				}
 			}
 		}
-	}
-			
+		else {
+
+			if (returnstr){
+				write(output, returnstr, strlen(returnstr));
+				write(output, "\n", 1);
+			}
+			free_null_terminated_pointer_array(argv);
+			close_up_shop();
+			exit(0);
+		}
+	}	
 	else {
 		report_error(errno, "Failed to fork", NULL);
 //		sexp_destroy_context(ctx);
@@ -2625,25 +2653,46 @@ int c_execute_single_process(int in_the_background, char *cmd, char **argv, char
 }
 
 
-char *dispatch_scheme_stuff(cmd_t *cmd) {
+char *dispatch_scheme_stuff(cmd_t *command) {
 	// iterate through the argv[i] and execute them in order, capturing the output and appendiing it to the string which will be returned.
 	int i;
-	char *output = NULL;
+	char *returns = NULL;
 	
-	for  (i = 0; i < cmd->argc; i++) {
-		char *component = evaluate_scheme_expression(1, cmd->argv[i], NULL);
-		if (!output) {
-			output = component;
+	int procid = -1;
+	char *ss = NULL;
+	char *cmd = *command->argv;
+	int in_the_background = command->bg;
+	char **argv = command->argv;
+	char *inputstring = command->inputstring;
+	int input = command->in;
+	int output = command->out;
+	int error = command->err;
+
+
+
+	fprintf(stderr,"In dispatch_scheme_stuff: %s\n",command->argv[0]);
+
+/*
+  if (command->input != 0) {
+  instring = read-all-input;
+  Close(input);
+  }
+*/
+
+	for  (i = 0; i < command->argc; i++) {
+		char *component = evaluate_scheme_expression(1, command->argv[i], NULL);
+		if (!returns) {
+			returns = component;
 		}
 		else if (component) {
-			output = (char *)realloc(output, strlen(output) + strlen(component) + 2);
-			strcat(output, " ");
-			strcat(output, component);
+			returns = (char *)realloc(returns, strlen(returns) + strlen(component) + 2);
+			strcat(returns, " ");
+			strcat(returns, component);
 			Free(component);
 		}
 		else Free(component);
 	}
-	return output;		
+	return returns;		
 }
 
 		
@@ -2654,6 +2703,7 @@ sexp run_commands(cmd_t *cmd) {
 	//static sexp inp = SEXP_FALSE, outp = SEXP_FALSE, errp = SEXP_FALSE;
 	int n = 0;
 	sexp sn = SEXP_TRUE; // This function takes s-expressions that are constant, or referenced elsewhere and passes them back up the chain
+	int pass_numbers = 1;
 
 	char *dp;
 	char *lp;
@@ -2670,16 +2720,28 @@ sexp run_commands(cmd_t *cmd) {
 
 		strtod(cmd->argv[0], &dp);
 		strtol(cmd->argv[0], &lp, 10);
+
+#define dispatch_path
 		
 		// So what I need to do here is set up the current-*-ports for indicated scheme expressions (the underlying fds ought to be ok)
 
 		if (0);
 		else if (is_sexp(cmd->argv[0]) || (strchr("$'", cmd->argv[0][0]) && cmd->argv[0][1] == '('))  {
+#if defined(dispatch_path)
+			cmd->run_scheme_expression = 1;
+			op  = NULL;
+#else
 			op = member("scm", builtins);
+#endif
 			Dprintf("Scheme function: %s\n", cmd->argv[0]);
 		}
 		else if (is_sexp(cmd->argv[0]) || (cmd->argv[0][0] == '\'' && cmd->argv[0][1] == '('))  {
+#if defined(dispatch_path)
+			cmd->run_scheme_expression = 1;
+			op  = NULL;
+#else
 			op = member("scm", builtins);
+#endif
 			Dprintf("Scheme function: %s\n", cmd->argv[0]);
 		}
 		else {
@@ -2689,10 +2751,10 @@ sexp run_commands(cmd_t *cmd) {
 
 		char *tcmd = completed_path(cmd->argv[0]);
 
-		if (!op && tcmd && isa_program(tcmd)) {
+		if (!op && ((tcmd && isa_program(tcmd)) || cmd->run_scheme_expression)) {
 			Free(tcmd);
 
-			n = c_execute_single_process(cmd->bg, *cmd->argv, cmd->argv, cmd->inputstring, cmd->in, cmd->out, cmd->err);
+			n = c_execute_single_process(cmd);
 			if (!n) sn = SEXP_TRUE; // unix commands return 0 on success, we map this to "true"
 			else {
 				sexp tn;
@@ -2700,8 +2762,8 @@ sexp run_commands(cmd_t *cmd) {
 				sn = tn = sexp_make_integer(ctx,n);
 			}
 		}
+#if !defined(dispatch_path)
 		else if (cmd->run_scheme_expression) { // This is a scheme expression or set of expressions to be run in a separate 
-			/**** WORKING HERE ****/
 			if (tcmd) Free(tcmd);
 			
 			begin {
@@ -2712,8 +2774,10 @@ sexp run_commands(cmd_t *cmd) {
 				Free(s);
 			}
 		}
+#endif
+
+
 #if defined(ALLOW_NUMBERS_AS_NUMBERS) // Not really useful
-		int pass_numbers = 1;
 		else if (pass_numbers && *cmd->argv[0] && (!*dp || !*lp) && !isa_program(tcmd)) { // it is a number of some sort, but not an executable file name
 			if (tcmd) Free(tcmd);
 
@@ -3490,7 +3554,7 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 #endif
 		}
 		
-		fprintf(stderr,"*** loop %d: %s ## %s\n", k, q, s);
+		//fprintf(stderr,"*** loop %d: %s ## %s\n", k, q, s);
 
 		//result = sexp_eval_string(ctx,"*last_igor_eval*",-1,ENV);
 
