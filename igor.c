@@ -2670,7 +2670,7 @@ char *dispatch_scheme_stuff(cmd_t *command) {
 
 
 
-	fprintf(stderr,"In dispatch_scheme_stuff: %s\n",command->argv[0]);
+	//fprintf(stderr,"In dispatch_scheme_stuff: %s\n",command->argv[0]);
 
 /*
   if (command->input != 0) {
