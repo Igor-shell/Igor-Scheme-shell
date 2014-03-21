@@ -22,7 +22,7 @@ OBJS =
 SRCS = $(OBJS:.o=.c)
 SO ?= so
 
-csupport.$(SO): csupport.stub external-support.c
+csupport.$(SO): csupport.stub external-support.c external-chibi.c
 	chibi-ffi csupport.stub
 	gcc -fPIC -shared csupport.c -o csupport.$(SO) -lchibi-scheme -lreadline -lhistory
 

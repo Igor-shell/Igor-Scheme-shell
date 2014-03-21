@@ -99,3 +99,24 @@
 
 
 
+Hash seems to start a line based comment.  This is ok, but we may have no way to deal with true and false?
+
+Hash seems to start a line based comment.  This is ok, but we may have no way to deal with true and false?
+Yeth? (display #t)
+"There was an error in:"
+"(display #t)"
+ERROR in "write": invalid type, expected Output-Port: #<undef>
+segmentation violation
+
+
+
+
+
+
+
+The command
+    Yeth? 'abc
+
+doesn't print the symbol 'abc We certainly need to check strings like
+"Run Me" for their presence, but (by fiat) we insist that a single
+quote is a scheme symbol

@@ -5,6 +5,15 @@
 ;;)
 					  
 
+;;;;(define-c-struct wordexp_t
+;;;;  constructor: make_wordexp
+;;;;  finalizer: delete_wordexp
+;;;;  
+;;;;  ((maybe-null array string) we_wordv get-wordexp  set-wordexp!) 
+;;;;  ((maybe-null array string) we_wordv get-word-count  set-word-count!)
+;;;;)
+
+
 (define-c-struct stat
 					  //constructor: make_file_stat
 					  finalizer: delete_file_stat
@@ -24,9 +33,8 @@
 					  (unsigned-long st_ctime get-stat-ctime set-stat-ctime!) ;;/* time of last status change */
 )
 
-(c-include "external-support.c")
 
-;;(define-c sexp (eval "sexp_eval") (sexp sexp sexp))
+(c-include "external-support.c")
 
 ;; (igor-read-line isfile inport prompt histfile)
 (define-c (maybe-null free string) 
@@ -51,7 +59,10 @@
 (define-c (maybe-null free stat) (file-stat "file_stat") (string))
 
 ;;(define-c int (system "system") (string))
-(define-c (maybe-null free array string null) (word-expand "wordexp_wrapper") (string))
+
+(define-c (sexp) (word-expand "sexp_wordexp") (string))
+;;(define-c (sexp) (word-expand "sexp_wordexp_ext") (string))
+(define-c (maybe-null free array string null) (we-word-expand "wordexp_wrapper") (string))
 (define-c (void)  (delete-string-array "delete_wordexp_array") ((array string)) )
 
 (define-c string (get-env "getenv") (string))

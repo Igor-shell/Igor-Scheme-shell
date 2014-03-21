@@ -10,10 +10,29 @@
 ;;       (syntax-rules ()
 ;;         ((name . pattern) template))))))
 
+(define track-loading #f)
 
 (define (dnl . args) (if (null? args) (display "") (let () (map display args) (newline))))
+(define (dnldbg . args) (if track-loading (apply dnl (cons "Loading trace: " args))))
 
 
+(dnldbg "Loading es.scm ")
+
+(define-syntax verbose-let*
+  (syntax-rules ()
+    ((verbose-let* () body1 body2 ...)
+     (let () body1 body2 ...))
+    ((verbose-let* ((name1 val1) (name2 val2) ...)
+       body1 body2 ...)
+     (let ((name1 val1))
+		 (display (quasiquote name1))
+		 (display " ")
+		 (display val1)
+		 (newline)
+       (verbose-let* ((name2 val2) ...)
+         body1 body2 ...)))))
+
+(dnldbg "simple functions")
 (define esc (make-string 1 #\x1b)) ;; hex character representation works in chibi, gsi * guile
 
 (define (andf . args)
@@ -49,6 +68,53 @@
 ;;;(define get-stat-mtime #f) ;;/* time of last modification */
 ;;;(define get-stat-ctime #f) ;;/* time of last status change */
 
+;;; (define scm-file-status 
+;;;   (let ((selectorlist (list 
+;;; 							  (list 'dev scm-get-stat-dev) ;;/* ID of device containing file */
+;;; 							  (list "dev" scm-get-stat-dev) ;;/* ID of device containing file */
+;;; 							  (list 'ino scm-get-stat-ino) ;;/* inode number */
+;;; 							  (list "ino" scm-get-stat-ino) ;;/* inode number */
+;;; 							  (list 'mode scm-get-stat-mode) ;;/* protection */
+;;; 							  (list "mode" scm-get-stat-mode) ;;/* protection */
+;;; 							  (list 'nlink scm-get-stat-nlink) ;;/* number of hard links */
+;;; 							  (list "nlink" scm-get-stat-nlink) ;;/* number of hard links */
+;;; 							  (list 'uid scm-get-stat-uid) ;;/* user ID of owner */
+;;; 							  (list "uid" scm-get-stat-uid) ;;/* user ID of owner */
+;;; 							  (list 'gid scm-get-stat-gid) ;;/* group ID of owner */
+;;; 							  (list "gid" scm-get-stat-gid) ;;/* group ID of owner */
+;;; 							  (list 'rdev scm-get-stat-rdev) ;;/* device ID (if special file) */
+;;; 							  (list "rdev" scm-get-stat-rdev) ;;/* device ID (if special file) */
+;;; 							  (list 'size scm-get-stat-size) ;;/* total size, in bytes */
+;;; 							  (list "size" scm-get-stat-size) ;;/* total size, in bytes */
+;;; 							  (list 'blksize scm-get-stat-blksize) ;;/* blocksize for file system I/O */
+;;; 							  (list "blksize" scm-get-stat-blksize) ;;/* blocksize for file system I/O */
+;;; 							  (list 'blocks scm-get-stat-blocks) ;;/* number of 512B blocks allocated */
+;;; 							  (list "blocks" scm-get-stat-blocks) ;;/* number of 512B blocks allocated */
+;;; 							  (list 'atime scm-get-stat-atime) ;;/* time of last access */
+;;; 							  (list "atime" scm-get-stat-atime) ;;/* time of last access */
+;;; 							  (list 'mtime scm-get-stat-mtime) ;;/* time of last modification */
+;;; 							  (list "mtime" scm-get-stat-mtime) ;;/* time of last modification */
+;;; 							  (list 'ctime scm-get-stat-ctime) ;;/* time of last status change */
+;;; 							  (list "ctime" scm-get-stat-ctime) ;;/* time of last status change */
+;;; 							  )))
+;;; 	 (lambda (file . selector)
+;;; 		(let ((fs (if (string? file) (file-stat file) file))
+;;; 				(select 
+;;; 				 (if (null? selector)
+;;; 					  (lambda x #f)
+;;; 					  (map (lambda (x) (if (procedure? x) x (let ((s (assq x selectorlist))) (if s (cdr s) #f)))))))
+;;; 				)
+;;; 		  (let ((result  (cond
+;;; 								((or (not file) (not selector) (null? selector)) #f)
+;;; 								((null? (cdr selector)) ;; single arg
+;;; 								 (select fs))
+;;; 								(map select fs))))
+;;; 			 (if (string? file) (delete-file-stat fs))
+;;; 			 result)))))
+
+(dnldbg "@ file-status")
+
+
 (define file-status 
   (let ((selectorlist (list 
 							  (list 'dev get-stat-dev) ;;/* ID of device containing file */
@@ -79,7 +145,7 @@
 							  (list "ctime" get-stat-ctime) ;;/* time of last status change */
 							  )))
 	 (lambda (file . selector)
-		(let ((fs (if (string? file) (file-stat file) file))
+		(let ((fs file)
 				(select 
 				 (if (null? selector)
 					  (lambda x #f)
@@ -90,7 +156,6 @@
 								((null? (cdr selector)) ;; single arg
 								 (select fs))
 								(map select fs))))
-			 (if (string? file) (delete-file-stat fs))
 			 result)))))
 
 
@@ -136,6 +201,7 @@
 ;;; )
 		
 
+(dnldbg "@ with-pipe-between")
 
 (define (with-pipe-between lmb1 lmb2)
   (let ((oci (current-input-port))	
@@ -162,6 +228,7 @@
 
 
 
+(dnldbg "@ 1 list-ref, list-set!")
 
 (define list-ref
   (letrec ((%list-ref list-ref))
@@ -175,6 +242,7 @@
        (set-car! l v)
        (list-set! (cdr l) (- i 1) v)))
 
+(dnldbg "@ 2 list-ref, list-set!")
 
  (define list-ref
    (letrec ((%list-ref list-ref)
@@ -195,6 +263,9 @@
        (if (list? i)
            (for-each (lambda (x y) (%list-set! l x y)) i v)
            (%list-set! l i v)))))
+
+(dnldbg "@ 1 list-set-c*r!")
+
 
  (define list-set-car! list-set!)
 
@@ -217,6 +288,8 @@
 	(cons (cons key value) alist))
 
  (define (abort) (exit 1))
+
+(dnldbg "@ assoc-*")
 
  (define (assoc-set! alist key val)
    (let loop ((l alist))
@@ -247,6 +320,7 @@
                       (loop (cdr a) (cons (car a) r)))))))
 
 
+(dnldbg "@ filter")
 
 (define (filter pred lst) 
   (cond 
@@ -267,6 +341,7 @@
 (define (prune-quotes-in-list x)
     (map prune-quotes x))
 					
+(dnldbg "@ read-all")
   
 (define (read-all)
   (define (*read-all*)
@@ -297,12 +372,16 @@
 
 
 
+(dnldbg "@ show")
 
 
 (define (show . args)
   (if (eq? (length args) 1)
 		(car args)
 		args))
+
+(dnldbg "@ string & list routines")
+
 
 (define (string-index str chr)
   (let ((tail (member chr (string->list str))))
@@ -373,6 +452,9 @@
 		(substring str 1 (string-length str))
 		""))
 
+
+(dnldbg "@ strspn & co")
+
  ;;
  ;; (strspn str set) returns index of first char not in set
  ;; (strcspn str set) returns index of first char in set
@@ -421,6 +503,9 @@
                  (loop results
                        (substring sstr (strspn sstr sep) (string-length sstr)))))))
    )
+
+(dnldbg "@ strtok")
+
 
 ;; This does not collapse multiple instances of either spaces or the indicated separator 
  (define (strtok str . sep)
@@ -524,6 +609,8 @@
 	;;; 							  ))
 
 
+(dnldbg "@ fence jumping")
+
 (define (fence-jumper str fence-pair . prune-palings)
   (call-with-current-continuation
 	(lambda (abort)
@@ -552,6 +639,8 @@
 			 (else 
 			  (loop (string-append l (string-car r)) (string-cdr r)))))))
 	))
+
+(dnldbg "@ tokenise-string")
 
 
 (define (tokenise-string str symbol-alist fences escape . sep)
@@ -713,6 +802,7 @@
 	)
   )
 
+(dnldbg "@ reconstruct-string")
 
 ;; reconstructs the string either with spaces or the indicated separator
 
@@ -731,6 +821,9 @@
 	((string? sa) (string-append ns sep sa))
 	(else "")
 	)))))
+
+
+(dnldbg "@ with-...")
 
 
 ;; Chibi's execute is (execute cmdstring arglist)
@@ -780,24 +873,12 @@
 ;;;        (let* ((name2 val2) ...)
 ;;;          body1 body2 ...)))))
 
-(define-syntax verbose-let*
-  (syntax-rules ()
-    ((verbose-let* () body1 body2 ...)
-     (let () body1 body2 ...))
-    ((verbose-let* ((name1 val1) (name2 val2) ...)
-       body1 body2 ...)
-     (let ((name1 val1))
-		 (display (quasiquote name1))
-		 (display " ")
-		 (display val1)
-		 (newline)
-       (verbose-let* ((name2 val2) ...)
-         body1 body2 ...)))))
+(dnldbg "@ expand-path")
 
 
 (define (*expand-path* file)
-  (dnl "*expand-path* " file)
-  (verbose-let* ((track-expansion #t)
+  (dnldbg "*expand-path* " file)
+  (let* ((track-expansion #f)
 			(expand-scheme-bits #f)
 			(path (strtok (list->string (map (lambda (x) 
 														  (if (equal? x (car (string->list ":"))) 
@@ -823,7 +904,7 @@
 
 
 (define (expand-path file) 
-  (let ((track-expansion #t))
+  (let ((track-expansion #f))
 	 (if track-expansion (display (string-append "expanding " file ":\n")))
 	 (let* ((ep (*expand-path* (if (symbol? file) (symbol->string file) file)))
 			  (result (if (or (not ep) (null? ep)) #f (car ep)))
@@ -862,6 +943,7 @@
 
 (define *eof* (let ((p (open-input-file "/dev/null"))) (let ((e (read p))) (close-port p) e)))
 
+(dnldbg "@ *evaluate-scheme-expression")
 
 (define (*evaluate-scheme-expression ctx sexpr env inputstring)
   (let* ((stdin-list #f) (stdin #f))
@@ -888,7 +970,7 @@
 				))))
 	 ))
 
-
+(dnldbg "@ call")
 
 (define (call bg . args)
   (if (or (not (boolean? bg)) (null? args))
@@ -940,6 +1022,8 @@
 		)
   ) 
 
+(dnldbg "@ system")
+
 (define (system string)
   (let* ((args (collapsing-strtok string))
 			(arg1 (word-expand (car args)))	
@@ -969,9 +1053,12 @@
 ;;		  fs
 ;;		  #f)))
 
+(dnldbg "@ *igor....*")
 
 (define *igor-report-backgrounding* #f)
 (define *igor-builtin-list* '())
+
+(dnldbg "@ *add-builtin*")
 
 (define (*add-builtin* name function)
   (if (not (string? name))
@@ -984,9 +1071,12 @@
 		  #t)))
 				
 (*add-builtin* "add-builtin" *add-builtin*)
+(dnldbg "@ added *add-builtin*")
 
 
 
+
+		  
 ;;; (define (*igor-execute-builtin-process* in-the-background func argv-list input-port output-port error-port)
 ;;;   (if (string? func)
 ;;; 		(cond
@@ -1055,8 +1145,9 @@
 ;;; 		  )	
 ;;; 		)
 ;;;   )
-		  
-			 
+
+
+
 ;;; ;(define igor-execute-single-process *igor-execute-single-process*)
 ;;; (define (igor-execute-single-process in-the-background cmd-string argv-list input-port output-port error-port)
 ;;;   (if #t -1	
@@ -1151,6 +1242,7 @@
 
 ;;(if verbosec-support (display "csupported\n"))
 
+(dnldbg "es.scm done")
 
 
 
