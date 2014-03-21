@@ -90,8 +90,8 @@
 
 (define-c (sexp) (word-expand "sexp_wordexp") (string))
 ;;(define-c (sexp) (word-expand "sexp_wordexp_ext") (string))
-(define-c (maybe-null free array string null) (we-word-expand "wordexp_wrapper") (string))
-(define-c (void)  (delete-string-array "delete_wordexp_array") ((array string)) )
+(define-c (maybe-null free array string null) (we-word-expand "wordexp_string_array") (string))
+(define-c (void)  (delete-string-array "delete_string_array") ((array string)) )
 
 (define-c string (get-env "getenv") (string))
 (define-c int (set-env "setenv") (string string int))

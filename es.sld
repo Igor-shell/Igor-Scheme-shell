@@ -14,23 +14,23 @@
   
   (export 
 	
-	preignition
-	initialise_interpreter
-	ctx
-	env
-	igor_ctx
-	igor_env
-	igor
-	close_up_shop
+;?	preignition
+;?	initialise_interpreter
+;?	ctx
+;?	env
+;?	igor_ctx
+;?	igor_env
+;?	igor
+;?	close_up_shop
 
-	eval
-	load
-;  display-to-string
-;  write-to-string
-;  evaluate-scheme-expression
+;?	eval
+;?	load
+; display-to-string
+; write-to-string
+; evaluate-scheme-expression
 
-;  term-read history-add history-set-max-length history-save 
-;  history-load read-from-terminal set-multiline-term-read
+; term-read history-add history-set-max-length history-save 
+; history-load read-from-terminal set-multiline-term-read
 	
 	;; c routines 
 	
@@ -46,7 +46,7 @@
 	;; scm-get-stat-atime scm-set-stat-atime! scm-get-stat-mtime scm-set-stat-mtime!
 	;; scm-get-stat-ctime scm-set-stat-ctime!
 
-	file-stat 
+;?	file-stat 
 	get-stat-dev get-stat-ino
 	get-stat-mode get-stat-nlink
 	get-stat-uid get-stat-gid
@@ -75,7 +75,8 @@
 	string-index list-head denull denull-and-flatten level depth 
 	strspn strcspn
 	collapsing-strtok strtok reconstruct-string 
-	filter *expand-path* expand-path *cross2* *cross*
+	filter
+	*expand-path* expand-path *cross2* *cross*
 	string-car string-cdr
 
 	with-input-from-port
