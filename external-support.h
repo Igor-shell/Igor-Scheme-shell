@@ -201,6 +201,21 @@ extern sexp run_source_file(char *filename);
 
 extern sexp load_igor_rc(char *urc);
 
+unsigned long get_stat_dev(char *);
+unsigned long get_stat_ino(char *);
+unsigned short get_stat_mode(char *);
+unsigned long get_stat_nlink(char *);
+unsigned short get_stat_uid(char *);
+unsigned short get_stat_gid(char *);
+unsigned long get_stat_rdev(char *);
+unsigned long get_stat_size(char *);
+unsigned long get_stat_blksize(char *);
+unsigned long get_stat_blocks(char *);
+unsigned long get_stat_atime(char *);
+unsigned long get_stat_mtime(char *);
+unsigned long get_stat_ctime(char *);
+
+
 extern sexp exit_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring);
 extern sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring);
 extern sexp repl_output(cmd_t *cmnd, char **argv, int in, int out, char *inputstring);
@@ -231,8 +246,8 @@ extern struct stat *file_stat(char *filename);
 extern sexp sexp_wordexp_sexp(sexp ctx, sexp sstr);
 extern sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr);
 
-extern char **wordexp_wrapper(char *str);
-extern void delete_wordexp_array(char  **wa);
+extern char **wordexp_string_array(char *str);
+extern void delete_string_array(char  **wa);
 
 extern char *igor_read_line(int isfile, FILE *f, char *prompt, char *history_file);
 
