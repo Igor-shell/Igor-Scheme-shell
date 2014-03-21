@@ -121,7 +121,6 @@
 #endif
 
 
-//#define TRACK_LOADING
 
 /*-  Included files  */
 
@@ -177,6 +176,14 @@
 #define IGOR_VERSION_VAR "*igor-version*"
 #endif
 
+
+#if !defined(IGOR_TRACKING_FUNCTION_VAR)
+#define IGOR_TRACKING_FUNCTION_VAR "*igor-track-function*"
+#endif
+
+#if !defined(IGOR_TRACKING_LIST_VAR)
+#define IGOR_TRACKING_LIST_VAR "*igor-track-execution-list*"
+#endif
 
 /*- Manifests, macros, and type declarations  */
 
@@ -465,6 +472,8 @@ char *supporting_initialisation[] = {
 	"(define " IGOR_VERSION_VAR "  \'" IGOR_VERSION ")",
 	"(define *running-script* 0)",
 	"(define *last_igor_eval* \"\")",
+	"(define " IGOR_TRACKING_LIST_VAR " (list))",
+	"(define (" IGOR_TRACKING_FUNCTION_VAR " args) (apply dnl args)))",
 
 	"(define **igor-input-port-stack** '())",
 	"(define **igor-output-port-stack** '())",
@@ -952,7 +961,7 @@ char *is_magic(char *s) {
 /*-- support routines for parsing */
 
 
-
+// this returns the expansion *as one string*
 char *word_expand_string(char *s) {
 	wordexp_t arg;
 	int i, n, k;
@@ -1257,17 +1266,48 @@ sexp sexp_get_procedure(sexp ctx, sexp env, char *procname) {
 	return sym;
 }
 
+int sexp_get_fixnum_value(sexp ctx, sexp env, char *name) {
+	int result = 0;
+	sexp_gc_var2(obj,tmp);
+	sexp_gc_preserve2(ctx,obj,tmp);
+	tmp = sexp_intern(ctx,name,-1);
+	obj = sexp_env_ref(ctx,env,tmp,SEXP_FALSE);
+
+	if (sexp_fixnump(obj))	result = sexp_unbox_fixnum(obj);
+	else result = ~0;
+
+	sexp_gc_release2(ctx);
+
+	return result;
+}
+
+long int sexp_get_long_fixnum_value(sexp ctx, sexp env, char *name) {
+	long  int result = 0;
+	sexp_gc_var2(obj,tmp);
+	sexp_gc_preserve2(ctx,obj,tmp);
+	tmp = sexp_intern(ctx,name,-1);
+	obj = sexp_env_ref(ctx,env,tmp,SEXP_FALSE);
+
+	if (sexp_fixnump(obj))	result = sexp_unbox_fixnum(obj);
+	else result = ~0L;
+
+	sexp_gc_release2(ctx);
+
+	return result;
+}
+
+
 char *get_input_string(sexp ctx, sexp instr) {
 	char *s;
-	sexp_gc_var2(gos,sstr);
-	sexp_gc_preserve2(ctx,gos,sstr);
+	sexp_gc_var3(gos,sstr,int1);
+	sexp_gc_preserve3(ctx,gos,sstr,int1);
 	
 	gos = sexp_get_procedure(ctx,env,"get-output-string");
-	
-	sstr = sexp_apply(ctx,gos,sexp_cons(ctx,instr,SEXP_NULL));
+	int1 = sexp_cons(ctx,instr,SEXP_NULL);
+	sstr = sexp_apply(ctx,gos,int1);
 	if (sexp_stringp(sstr)) s = strdup(sexp_string_data(sstr));
 	else s = NULL;
-	sexp_gc_release2(ctx);
+	sexp_gc_release3(ctx);
 	return s;
 }
 
@@ -1286,38 +1326,12 @@ sexp make_input_string(sexp ctx, char *str) {
 
 /*---- exotic wordexp support */
  
-/* sexp sexp_wordexp(char *sstr) { */
-/* 	int i; */
-/* 	char *s; */
-/* 	wordexp_t w; */
-/* 	sexp_gc_var3(result, str, obj); */
-/* 	sexp_gc_preserve3(ctx,result,str, obj); */
-
-/* 	s = strdup(sstr); */
-
-/* 	i = wordexp(s,&w,0); */
-/* 	if (!i) { */
-/* 		result  = SEXP_NULL; */
-/* 		for (i = w.we_wordc-1; i >= 0; i--) { */
-/* 			str = sexp_c_string(ctx, w.we_wordv[i], -1); */
-/* 			obj = sexp_cons(ctx,str,result); */
-/* 			result = obj; */
-/* 		} */
-/* 	} */
-/* 	free(s); */
-/* 	wordfree(&w); */
-
-/* 	sexp_gc_release3(ctx); */
-/* 	return result; */
-/* } */
-
-
 sexp sexp_wordexp_sexp(sexp ctx, sexp sstr) {
 	int i;
 	char *s;
 	wordexp_t w;
-	sexp_gc_var3(result, str, obj);
-	sexp_gc_preserve3(ctx,result,str, obj);
+	sexp_gc_var2(result, str);
+	sexp_gc_preserve2(ctx,result,str);
 
 	if (!sexp_stringp(sstr)) {
 		report_error(0, "word-exp takes a string argument", __FUNCTION__);
@@ -1332,14 +1346,13 @@ sexp sexp_wordexp_sexp(sexp ctx, sexp sstr) {
 		result  = SEXP_NULL;
 		for (i = w.we_wordc-1; i >= 0; i--) {
 			str = sexp_c_string(ctx, w.we_wordv[i], -1);
-			obj = sexp_cons(ctx,str,result);
-			result = obj;
+			result = sexp_cons(ctx,str,result);
 		}
 	}
 	free(s);
 	wordfree(&w);
 
-	sexp_gc_release3(ctx);
+	sexp_gc_release2(ctx);
 	return result;
 }
 
@@ -1347,8 +1360,8 @@ sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 	int i;
 	char *s;
 	wordexp_t w;
-	sexp_gc_var3(result, str, obj);
-	sexp_gc_preserve3(ctx,result,str, obj);
+	sexp_gc_var2(result, str);
+	sexp_gc_preserve2(ctx,result,str);
 
 	if (sexp_unbox_fixnum(n) != 1) {
 		char *em;
@@ -1361,7 +1374,7 @@ sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 		else {
 			report_error(0, "word-exp passed the wrong number of arguments", __FUNCTION__);
 		}
-		sexp_gc_release3(ctx);
+		sexp_gc_release2(ctx);
 		return SEXP_FALSE;
 	}
 
@@ -1379,19 +1392,18 @@ sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 		result  = SEXP_NULL;
 		for (i = w.we_wordc-1; i >= 0; i--) {
 			str = sexp_c_string(ctx, w.we_wordv[i], -1);
-			obj = sexp_cons(ctx,str,result);
-			result = obj;
+			result = sexp_cons(ctx,str,result);
 		}
 	}
 	free(s);
 	wordfree(&w);
 
-	sexp_gc_release3(ctx);
+	sexp_gc_release2(ctx);
 	return result;
 }
 
 
-char **wordexp_wrapper(char *str) {
+char **wordexp_string_array(char *str) {
 	wordexp_t w;
 	char **arry = NULL;
 	int i = wordexp(str,&w,0);
@@ -1411,7 +1423,7 @@ char **wordexp_wrapper(char *str) {
 	}
 }
 
-void delete_wordexp_array(char  **wa) {
+void delete_string_array(char  **wa) {
 	int i;
 	for (i = 0; wa && wa[i]; i++) {free(wa[i]); wa[i] = NULL;} // Just in case there is something pointing into wa
 	if (wa) free(wa);
@@ -1421,18 +1433,38 @@ void delete_wordexp_array(char  **wa) {
 /*--- File handling */
 
 sexp open_input_fd(int fd) {
-	sexp inp = 
-		sexp_apply(ctx,sexp_eval_string(ctx,"open-input-file-descriptor", -1, env),
-			sexp_cons(ctx,sexp_make_integer(ctx, fd), SEXP_NULL));
+	sexp inp = SEXP_FALSE, int1 = SEXP_FALSE, int2 = SEXP_FALSE;
+
 	sexp_preserve_object(ctx,inp);
+	sexp_preserve_object(ctx,int1);
+	sexp_preserve_object(ctx,int2);
+
+	int1  = sexp_eval_string(ctx,"open-input-file-descriptor", -1, env);
+	int2 = sexp_cons(ctx,sexp_make_integer(ctx, fd), SEXP_NULL);
+
+	inp = sexp_apply(ctx,int1, int2);
+
+	sexp_release_object(ctx,int1);
+	sexp_release_object(ctx,int2);
+
 	return inp;
 }
 
 sexp open_output_fd(int fd) {
-	sexp outp = 
-		sexp_apply(ctx,sexp_eval_string(ctx,"open-output-file-descriptor", -1, env),
-			sexp_cons(ctx,sexp_make_integer(ctx, fd), SEXP_NULL));
+	sexp outp = SEXP_FALSE, int1 = SEXP_FALSE, int2 = SEXP_FALSE;
+
 	sexp_preserve_object(ctx,outp);
+	sexp_preserve_object(ctx,int1);
+	sexp_preserve_object(ctx,int2);
+
+	int1  = sexp_eval_string(ctx,"open-output-file-descriptor", -1, env);
+	int2 = sexp_cons(ctx,sexp_make_integer(ctx, fd), SEXP_NULL);
+
+	outp = sexp_apply(ctx,int1, int2);
+
+	sexp_release_object(ctx,int1);
+	sexp_release_object(ctx,int2);
+
 	return outp;
 }
 
@@ -1501,25 +1533,31 @@ sexp argv_to_list(sexp ctx, char **argv, int n) {
 sexp sexp_wordexp(char *sstr) {
 	int i;
 	char *s;
-	wordexp_t w;
-	sexp_gc_var3(result, str, obj);
-	sexp_gc_preserve3(ctx,result,str, obj);
+	wordexp_t *w;
+	sexp_gc_var2(result, str);
+	sexp_gc_preserve2(ctx,result,str);
+
+	w = (wordexp_t *)calloc(1,sizeof(*w));
+
+	if (!w) abort();
 
 	s = strdup(sstr);
 
-	i = wordexp(s,&w,0);
+	i = wordexp(s,w,0);
 	if (!i) {
 		result  = SEXP_NULL;
-		for (i = w.we_wordc-1; i >= 0; i--) {
-			str = sexp_c_string(ctx, w.we_wordv[i], -1);
-			obj = sexp_cons(ctx,str,result);
-			result = obj;
+		for (i = w->we_wordc-1; i >= 0; i--) {
+			str = sexp_c_string(ctx, w->we_wordv[i], -1);
+			result = sexp_cons(ctx,str,result);
 		}
 	}
-	free(s);
-	wordfree(&w);
+	else result = SEXP_FALSE;
 
-	sexp_gc_release3(ctx);
+	free(s);
+	wordfree(w);
+	if (w) free(w);
+
+	sexp_gc_release2(ctx);
 	return result;
 }
 	
