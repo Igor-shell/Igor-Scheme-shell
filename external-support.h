@@ -78,13 +78,13 @@ typedef struct BUILTIN {
 
 extern char *gets(char *);
 extern sexp argv_to_list(sexp ctx, char **argv, int len);
-extern sexp ctx, env, ERRCON = SEXP_FALSE;
+extern sexp ctx, env, ERRCON;
 extern sexp sym;
 extern sexp igor_execute;
 extern sexp current_input, current_output, current_error;
-extern char *error_message = NULL;
-extern pid_t igor_pid = 0;
-extern pid_t igor_pgid = 0;
+extern char *error_message;
+extern pid_t igor_pid;
+extern pid_t igor_pgid;
 extern int starts_sexp(char *s);
 extern int is_sexp(char *s);
 extern int is_unfinished_sexp(char *s);
@@ -174,7 +174,7 @@ extern void signalhandler(int p);
 
 extern int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error);
 
-extern extern char *dispatch_scheme_stuff(cmd_t *cmd);
+extern char *dispatch_scheme_stuff(cmd_t *cmd);
 //int c_execute_single_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) 
 int c_execute_single_process(cmd_t *command);
 

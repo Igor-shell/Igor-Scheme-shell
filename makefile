@@ -3,10 +3,19 @@
 # $Header$
 # $Log$
 
-LOCALIBDIR = /usr/local/lib
+#OPTLIBDIR = /opt/lib
+#OPTLOCALLIBDIR = /opt/local/lib
+LOCALLIBDIR = /usr/local/lib
 CHIBILIBDIR = /usr/local/lib/chibi
 CHIBISHAREDIR = /usr/local/lib/chibi
 
+#OPTINCDIR = /opt/include
+#OPTLOCALINCDIR = /opt/local/include
+LOCALINCDIR = /usr/local/include
+CHIBIINCDIR = /usr/local/include/chibi
+
+
+ 
 DEBUG = -ggdb -DDEBUGGING -Wall 
 #DEBUG = -ggdb -DDEBUGGING
 
@@ -35,12 +44,12 @@ SO ?= so
 
 
 
-igor: igor.c es.sld es.$(SO) libexternal-support.so
-	gcc $(DEBUG) -o igor igor.c -I/opt/local/include external-support.o -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme -lexternal-support
+igor: igor.c es.sld es.$(SO) 
+	gcc $(DEBUG) -o igor igor.c -I/opt/local/include  -L$(LOCALLIBDIR) -lreadline -lhistory -lchibi-scheme -lexternal-support
 	chmod a+rx igor
 
 libexternal-support.$(SO): external-support.c external-support.h
-	gcc $(DEBUG) -fPIC -shared -Wall  -o libexternal-support.$(SO) external-support.c -I/opt/local/include  -lchibi-scheme -lreadline -lhistory
+	gcc $(DEBUG) -fPIC -shared -Wall  -o libexternal-support.$(SO) external-support.c -I$(LOCALINCDIR) -lchibi-scheme -lreadline -lhistory
 
 es.$(SO):	es.stub es.sld external-support.o 
 	chibi-ffi es.stub
@@ -54,15 +63,24 @@ install: igor
 install-links:
 	echo "I know how to do it for my Gentoo machine, but elsewhere?\n"
 
-install-links-gentoo:
-	sudo install -D --group=root --owner=root --mode=755 libexternal-support.so $(LIBDIR)
-	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBRDIR)/chibi/local
-	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/chibi/local
+install-lib: libexternal-support.$(SO)
+	sudo install -D --group=root --owner=root --mode=755 libexternal-support.so $(LOCALLIBDIR)
 
-install-links-no-really: install
-	sudo install -D --group=root --owner=root --mode=755 libexternal-support.so /usr/local/lib
-	sudo install -D --group=root --owner=root --mode=755 es.so /usr/local/lib/chibi/local
-	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm /usr/local/share/chibi/local
+install-links-gentoo: install-lib install
+	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/local
+
+# for local modifications
+install-links-no-really: install-lib install
+	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/local
+
+install-gentoo: install-links-gentoo install
+	echo Installed
 
 clean:
 	rm -f igor *.o *.so
@@ -70,5 +88,5 @@ clean:
 
 
 tester: tester.c local/csupport.sld local/csupport.$(SO)
-	gcc -ggdb -DDEBUGGING -Wall -o tester tester.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
+	gcc -ggdb -DDEBUGGING -Wall -o tester tester.c -I/opt/local/include -L$(LOCALLIBDIR) -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
 
