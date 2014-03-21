@@ -83,8 +83,6 @@ int main(int argc, char **argv) {
   /* run shell */
   code = igor(argc, argv);
 
-  sexp_release_object(ctx,res);
-
   close_up_shop();
   return code;
 }

@@ -15,7 +15,8 @@ LOCALINCDIR = /usr/local/include
 CHIBIINCDIR = /usr/local/include/chibi
 
 
- 
+
+DEBUG = -ggdb -DDEBUGGING -Wall -DTRACK_LOADING
 DEBUG = -ggdb -DDEBUGGING -Wall 
 #DEBUG = -ggdb -DDEBUGGING
 
