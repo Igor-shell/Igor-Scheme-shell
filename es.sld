@@ -1,6 +1,7 @@
 
-(define-library (local csupport)
+(define-library (local es)
   (import (scheme base))
+  (import (scheme file))
   (import (scheme read))
   (import (scheme write))
   (import (chibi system))
@@ -12,26 +13,51 @@
   (import (srfi 98))
   
   (export 
+	
+	preignition
+	initialise_interpreter
+	ctx
+	env
+	igor_ctx
+	igor_env
+	igor
+	close_up_shop
+
+	eval
+	load
+;  display-to-string
+;  write-to-string
+;  evaluate-scheme-expression
+
 ;  term-read history-add history-set-max-length history-save 
 ;  history-load read-from-terminal set-multiline-term-read
 	
 	;; c routines 
-	word-expand-wrapper get-env set-env unset-env
+	
+	;;sexp-wordexp
+	word-expand get-env set-env unset-env
 
-	sexp-fd-val
+	;; scm-file-stat 
+	;; scm-get-stat-dev scm-set-stat-dev! scm-get-stat-ino scm-set-stat-ino!
+	;; scm-get-stat-mode scm-set-stat-mode! scm-get-stat-nlink scm-set-stat-nlink!
+	;; scm-get-stat-uid scm-set-stat-uid! scm-get-stat-gid scm-set-stat-gid!
+	;; scm-get-stat-rdev scm-set-stat-rdev! scm-get-stat-size scm-set-stat-size!
+	;; scm-get-stat-blksize scm-set-stat-blksize! scm-get-stat-blocks scm-set-stat-blocks!
+	;; scm-get-stat-atime scm-set-stat-atime! scm-get-stat-mtime scm-set-stat-mtime!
+	;; scm-get-stat-ctime scm-set-stat-ctime!
 
 	file-stat 
-	get-stat-dev set-stat-dev! get-stat-ino set-stat-ino!
-	get-stat-mode set-stat-mode! get-stat-nlink set-stat-nlink!
-	get-stat-uid set-stat-uid! get-stat-gid set-stat-gid!
-	get-stat-rdev set-stat-rdev! get-stat-size set-stat-size!
-	get-stat-blksize set-stat-blksize! get-stat-blocks set-stat-blocks!
-	get-stat-atime set-stat-atime! get-stat-mtime set-stat-mtime!
-	get-stat-ctime set-stat-ctime!
+	get-stat-dev get-stat-ino
+	get-stat-mode get-stat-nlink
+	get-stat-uid get-stat-gid
+	get-stat-rdev get-stat-size
+	get-stat-blksize get-stat-blocks
+	get-stat-atime get-stat-mtime
+	get-stat-ctime
 
 	;;	argv-to-list
 
-	;; csupport.scm
+	;; es.scm
 	;;; variables
 	;;	paren-fence-list
 	;;	bracket-fence-list
@@ -39,7 +65,6 @@
 	;;	quote-fence-list
 	;;	igor-token-list
 
-	word-expand
 	*igor-report-backgrounding*
 	*igor-builtin-list*
 
@@ -91,6 +116,6 @@
 	;; igor-token-list
 	)
 
-  (include-shared "csupport")
-  (include "csupport.scm")
+  (include-shared "es")
+  (include "es.scm")
   )

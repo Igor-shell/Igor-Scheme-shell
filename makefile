@@ -3,7 +3,24 @@
 # $Header$
 # $Log$
 
+#OPTLIBDIR = /opt/lib
+#OPTLOCALLIBDIR = /opt/local/lib
+LOCALLIBDIR = /usr/local/lib
+CHIBILIBDIR = /usr/local/lib/chibi
+CHIBISHAREDIR = /usr/local/lib/chibi
+
+#OPTINCDIR = /opt/include
+#OPTLOCALINCDIR = /opt/local/include
+LOCALINCDIR = /usr/local/include
+CHIBIINCDIR = /usr/local/include/chibi
+
+
+ 
+DEBUG = -ggdb -DDEBUGGING -Wall 
+#DEBUG = -ggdb -DDEBUGGING
+
 CC = gcc
+#CC = clang
 CXX = g++
 
 #CPPFLAGS =
@@ -27,31 +44,49 @@ SO ?= so
 
 
 
-igor: igor.c local/csupport.sld local/csupport.$(SO)
-	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
+igor: igor.c es.sld es.$(SO) 
+	gcc $(DEBUG) -o igor igor.c -I/opt/local/include  -L$(LOCALLIBDIR) -lreadline -lhistory -lchibi-scheme -lexternal-support
 	chmod a+rx igor
 
-tester: tester.c local/csupport.sld local/csupport.$(SO)
-	gcc -ggdb -DDEBUGGING -Wall -o tester tester.c -I/opt/local/include -L/usr/local/lib -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
+libexternal-support.$(SO): external-support.c external-support.h
+	gcc $(DEBUG) -fPIC -shared -Wall  -o libexternal-support.$(SO) external-support.c -I$(LOCALINCDIR) -lchibi-scheme -lreadline -lhistory
 
-install:
+es.$(SO):	es.stub es.sld external-support.o 
+	chibi-ffi es.stub
+	gcc $(DEBUG) -fPIC -shared es.c -o es.$(SO) -lchibi-scheme -lreadline -lhistory
+
+install: igor
 	sudo mv /bin/igor /tmp/igor || true
 	sudo cp -p igor /bin/igor
 	sudo chown root.root /bin/igor 
 
 install-links:
-	echo I know how to do it for my Gentoo machine, but elsewhere?
-	echo ... for me it is 
-	echo '    ln -s ~/igor/local /usr/local/lib64/chibi/'
+	echo "I know how to do it for my Gentoo machine, but elsewhere?\n"
 
-local: igor.c local/csupport.sld local/csupport.$(SO)
-	gcc -ggdb -DDEBUGGING -Wall -o igor igor.c -L/usr/local/lib -lreadline -lhistory -lchibi-scheme
-	chmod a+rx igor
+install-lib: libexternal-support.$(SO)
+	sudo install -D --group=root --owner=root --mode=755 libexternal-support.so $(LOCALLIBDIR)
 
-local/csupport.$(SO): local/external-support.c local/csupport.sld local/csupport.stub
-	make -C local clean csupport.$(SO)
-	make
+install-links-gentoo: install-lib install
+	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/local
+
+# for local modifications
+install-links-no-really: install-lib install
+	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBDIR)/local
+	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/local
+
+install-gentoo: install-links-gentoo install
+	echo Installed
 
 clean:
-	make -C local clean 
-	rm -f igor *.o
+	rm -f igor *.o *.so
+
+
+
+tester: tester.c local/csupport.sld local/csupport.$(SO)
+	gcc -ggdb -DDEBUGGING -Wall -o tester tester.c -I/opt/local/include -L$(LOCALLIBDIR) -L/opt/local/lib -lreadline -lhistory -lchibi-scheme
+

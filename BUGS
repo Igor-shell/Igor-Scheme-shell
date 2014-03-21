@@ -1,0 +1,122 @@
+2014-01-02-14:00:40 -- Failed to evaluate [(display pork) hit an unopened output port]
+
+						  "(display pork)"
+						  ERROR in "write": invalid type, expected Output-Port: #<undef>
+						  igor: Exception raised [(display pork)]
+						  scm_func finished evaluating (display pork)
+						  You have mail, Thur. echo "(display pork) hit an unopened output port" >> BUGS
+						  "There was an error in:"
+						  "(display pork) hit an unopened output port"
+						  ERROR: bad set! syntax: (set! *last_igor_eval* (display pork) hit an unopened output port)
+
+
+  There are actually two bugs here; the first is the problem with the
+  output port, the second is that it tries to evaluate the eval'd thing.
+
+
+2014-01-29-21:03:10 Problems with  ^c and ^\ not Doing The Right Thing.
+
+						  ls -1 | sort -r | tr aeiou AEIOU" does  not work -- the window just dies.
+						  Still have the memory leak associated with completed_path and 
+
+						  ==3220== 244 (128 direct, 116 indirect) bytes in 8 blocks are definitely lost in loss record 19 of 50
+						  ==3220==    at 0x4C29E20: malloc (vg_replace_malloc.c:291)
+						  ==3220==    by 0x83F2C9E: wordexp_wrapper (in /local/home/randall/igor/src/local/csupport.so)
+						  ==3220==    by 0x83F4517: sexp_word_expand_stub (in /local/home/randall/igor/src/local/csupport.so)
+						  ==3220==    by 0x529F5D0: sexp_apply (vm.c:1218)
+						  ==3220==    by 0x402C14: completed_path (igor.c:471)
+						  ==3220==    by 0x4090BE: run_commands (igor.c:2690)
+						  ==3220==    by 0x40A033: command_loop (igor.c:3035)
+						  ==3220==    by 0x40C720: igor (igor.c:3863)
+						  ==3220==    by 0x40CAFD: main (igor.c:3940)
+						  ==3220== 
+						  ==3220== 1,015 bytes in 7 blocks are definitely lost in loss record 29 of 50
+						  ==3220==    at 0x4C2BF50: calloc (vg_replace_malloc.c:618)
+						  ==3220==    by 0x75D254C: sexp_stat_stub (filesystem.c:372)
+						  ==3220==    by 0x529F5D0: sexp_apply (vm.c:1218)
+						  ==3220==    by 0x402C14: completed_path (igor.c:471)
+						  ==3220==    by 0x4090BE: run_commands (igor.c:2690)
+						  ==3220==    by 0x40A033: command_loop (igor.c:3035)
+						  ==3220==    by 0x40C720: igor (igor.c:3863)
+						  ==3220==    by 0x40CAFD: main (igor.c:3940)
+
+								 On Sat, Jan 25, 2014 at 1:31 AM, Alex Shinn <alexshinn@gmail.com> wrote:
+								 > On Sat, Jan 25, 2014 at 7:55 AM, Ciprian Dorin Craciun
+								 > <ciprian.craciun@gmail.com> wrote:
+								 >>
+								 >>     Hello all!
+								 >>
+								 >>     I'm trying to use Chibi's FFI generator to wrap a function that
+								 >> has the following signature, and whose contract says that the `output`
+								 >> should be `free`-ed by the caller.
+								 >>
+								 >>        bool spit_string (char * * output)
+								 >>
+								 >>     Thus I've defined the function as:
+								 >>
+								 >>        (define-c boolean spit_string ((result reference free string)))
+								 >>
+								 >>     However in the resulting C code (with Chibi 0.6.1), doesn't seem
+								 >> to call any `free`.  In fact either with `free` type modifier, or
+								 >> without, the resulting C code is identical.
+								 >
+								 >
+								 > Unfortunately Chibi doesn't have a way to free C strings
+								 > currently.  Chibi strings are actually offsets into bytevectors,
+								 > which are defined as
+								 >
+								 >     struct {
+								 >       sexp_uint_t length;
+								 >       char data[];
+								 >     } bytes;
+								 >
+								 > which means we need to copy C strings to be used in Chibi.
+
+								 This is OK, I don't mind the cloning of the data.
+
+
+								 > We could update chibi-ffi to free the C string immediately
+								 > after we've copied it into Chibi.
+
+								 Exactly.  This is what I would have expected after I've read the
+								 documentation for the `free` modifier.  Because currently it leaks the
+								 original string.
+
+
+								 >>     Moreover replacing `string` with some `data` structure that I've
+								 >>
+								 >> previously defined, doesn't seem to change the situation.
+								 >
+								 >
+								 > If you return a pointer with the "free" modifier, it should call
+								 >
+								 >   sexp_make_cpointer(ctx, type, ptr, SEXP_FALSE, 1)
+								 >
+								 > where the final "1" means to call the finalizer on gc
+								 > collection, and where the default finalizer for a foreign
+								 > pointer is "free".
+
+
+
+
+Hash seems to start a line based comment.  This is ok, but we may have no way to deal with true and false?
+
+Hash seems to start a line based comment.  This is ok, but we may have no way to deal with true and false?
+Yeth? (display #t)
+"There was an error in:"
+"(display #t)"
+ERROR in "write": invalid type, expected Output-Port: #<undef>
+segmentation violation
+
+
+
+
+
+
+
+The command
+    Yeth? 'abc
+
+doesn't print the symbol 'abc We certainly need to check strings like
+"Run Me" for their presence, but (by fiat) we insist that a single
+quote is a scheme symbol
