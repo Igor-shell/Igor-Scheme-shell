@@ -52,7 +52,8 @@ igor: igor.c es.sld es.$(SO)
 libexternal-support.$(SO): external-support.c external-support.h
 	gcc $(DEBUG) -fPIC -shared -Wall  -o libexternal-support.$(SO) external-support.c -I$(LOCALINCDIR) -lchibi-scheme -lreadline -lhistory
 
-es.$(SO):	es.stub es.sld external-support.o 
+es.$(SO):	es.stub es.sld libexternal-support.so 
+	rm -f es.c
 	chibi-ffi es.stub
 	gcc $(DEBUG) -fPIC -shared es.c -o es.$(SO) -lchibi-scheme -lreadline -lhistory
 
@@ -84,7 +85,7 @@ install-gentoo: install-links-gentoo install
 	echo Installed
 
 clean:
-	rm -f igor *.o *.so
+	rm -f igor *.o *.so es.c
 
 
 
