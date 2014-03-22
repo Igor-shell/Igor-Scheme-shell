@@ -168,6 +168,9 @@
 #define IGOR_SYS_RC_FILE "/etc/igor-rc"
 #define IGOR_RC_FILE ".igor-rc"
 
+#define IGOR_COMMAND_PROLOGUE "*igor-command-prologue*"
+#define IGOR_COMMAND_EPILOGUE "*igor-command-epilogue*"
+
 #if !defined(IGOR_HISTORY_FILE_VAR)
 #define IGOR_HISTORY_FILE_VAR "*igor-history-file*"
 #endif
@@ -314,9 +317,9 @@ typedef struct CMD_T {
 	int shuto, shute;
 	int bg;
 	int NOT; // indicate that the "truth" value returned should be complemented
+	int and_next, or_next;  // it is an error if both and_next and or_next are set
 	struct CMD_T *next;
 } cmd_t;
-
 
 typedef sexp (*builtin_func)(cmd_t *command, char **argv, int in, int out, char *ins); // the "command" is often NULL
 
@@ -348,8 +351,8 @@ extern char *gets(char *);
 extern char *dispatch_scheme_stuff(cmd_t *cmd);
 
 void close_up_shop();
-void run_command_prologue(char *cmds, cmd_t *C);
-void run_command_epilogue(char *cmds, cmd_t *C, sexp rv);
+void run_command_prologue(char *cmds);
+void run_command_epilogue(char *cmds, sexp rv);
 
 
 /*--  Variables  */
@@ -394,7 +397,10 @@ char squote = '\'';
 char dquote = '"';
 char bquote = '`';
 
+// These are added to the list of symbols using add_magic in igor()
 char *quotedlist = "'(";
+//char *herestr = "<<<";
+char *heredoc = "<<";
 char *andsep = "&&";
 char *orsep = "||";
 char *stdouterrapp = "+>>&";
@@ -414,7 +420,7 @@ char *endblock = "}";
 char *shellcmd = "$(";
 char *varexpr = "${";
 char *comment = "#";
-char *not = "!"
+char *not = "!";
 
 char *continuation_str = "\\";
 
@@ -475,6 +481,17 @@ char *supporting_initialisation[] = {
 	"(define *last_igor_eval* \"\")",
 	"(define " IGOR_TRACKING_LIST_VAR " (list))",
 	"(define (" IGOR_TRACKING_FUNCTION_VAR " args) (apply dnl args)))",
+	"(define (dnl . args) (if (null? args) (display "") (let () (map display args) (newline))))",
+
+#if 1
+	"(define *igor-display-prologue* #f)",
+	"(define *igor-display-epilogue* #f)",
+	"(define (" IGOR_COMMAND_PROLOGUE " cmd) (if *igor-display-prologue* (dnl \"prologue \" cmd )))",
+	"(define (" IGOR_COMMAND_EPILOGUE " cmd rv) (if *igor-display-epilogue* (dnl \"epilogue \" cmd \" --> \" rv)))",
+#else
+	"(define (" IGOR_COMMAND_PROLOGUE " cmd) #t)",
+	"(define (" IGOR_COMMAND_EPILOGUE " cmd rv) rv)",
+#endif
 
 	"(define **igor-input-port-stack** '())",
 	"(define **igor-output-port-stack** '())",
@@ -667,6 +684,29 @@ char *insert_string(int n, char *s, char *p, char *insertion) {
 	Free(tmp);
 	return s;
 }
+
+// This will, of course, need freeing....
+char *string_array_as_string(int argc, char **argv) {
+	int i, n;
+	char *s = NULL;
+
+	if (argc > 0) {
+		for (i = n = 0; i < argc; i++) {
+			n += 1 + strlen(argv[i]);
+		}
+		s = (char *)malloc(n);
+
+		*s = 0;
+		strcat(s, argv[0]);
+
+		for (i = 1; i < argc; i++) {
+			strcat(s, " ");
+			strcat(s, argv[i]);
+		}
+	}
+	return s;
+}
+
 
 
 
@@ -1565,14 +1605,14 @@ sexp sexp_wordexp(char *sstr) {
 /*---- calls the scheme routine expand-path to complete the path element in s */
 
   char *completed_path(char *s) { // Don't free s, the calling routine needs to deal with it
-	sexp_gc_var4(expanded,p,q,r);
+	sexp_gc_var3(expanded,p,r);
 	char *sexpr, *t;
-	sexp_gc_preserve4(ctx,expanded,p,q,r);
+	sexp_gc_preserve3(ctx,expanded,p,r);
+
 	if (s) {
 		if (*s == '/' || !strncmp(s,"./",2) || !strncmp(s,"../",3))  return strdup(s); // it is an absolute or relative reference
 
 		if (is_sexp(s)) { 
-
 			t = evaluate_scheme_expression(0, s,NULL);
 		//	Free(s);
 		}
@@ -1580,24 +1620,21 @@ sexp sexp_wordexp(char *sstr) {
 			t = s;
 		}
 
-		sexp_gc_preserve1(ctx, expanded);
 		//expanded = sexp_eval(ctx, sexp_list2(ctx,sexp_eval_string(ctx,"expand-path",-1,ENV),sexp_c_string(ctx,t,-1)), ENV);
 
-		p = sexp_eval_string(ctx,"expand-path",-1,ENV);
-		q = sexp_c_string(ctx,s,-1);
-		r = sexp_cons(ctx, q, SEXP_NULL);
+		r = SEXP_NULL;
+		r = sexp_cons(ctx, sexp_c_string(ctx,s,-1), r);
+		p = sexp_get_procedure(ctx,env,"expand-path");
 		expanded = sexp_apply(ctx, p, r);		
 		
 		sexpr = (sexp_stringp(expanded) ? strdup(sexp_string_data(expanded)) : NULL);
 
-		sexp_gc_release1(ctx);
 		//fprintf(stderr, ">>>>>> %s\n", sexpr);
 		//Free(t);
 
 		if (t && t != s) Free(t);
 
-
-		sexp_gc_release4(ctx);
+		sexp_gc_release3(ctx);
 
 		if (sexpr && !strcmp(sexpr,"#f") && access(sexpr,F_OK) == Ok) return NULL;
 		else return sexpr;
@@ -1967,8 +2004,8 @@ char *get_commandline(FILE *f, char *buffer) {
 sexp execute_command_string(char *cmds) {
 	char **tokenise_cmdline(char *cmdline);
 	cmd_t *process_token_list(char **Argv, int in, int out,int err);
-	void run_command_prologue(char *cmds, cmd_t *C);
-	void run_command_epilogue(char *cmds, cmd_t *C, sexp rv);
+	void run_command_prologue(char *cmds);
+	void run_command_epilogue(char *cmds, sexp rv);
 	sexp run_commands(cmd_t *cmd);
 
 	char **argv = 0;
@@ -1977,9 +2014,11 @@ sexp execute_command_string(char *cmds) {
 	argv = tokenise_cmdline(cmds);
 
 	C = process_token_list(argv,0,1,2);
+	//fprintf(stderr,">%s<\n", cmds);
+	C->cmd = strdup(cmds);
 			
 	// Call to run-command-prologue
-	run_command_prologue(cmds, C);
+	run_command_prologue(cmds);
 
 	if (C) {
 		sexp rtv = SEXP_FALSE;
@@ -1988,7 +2027,7 @@ sexp execute_command_string(char *cmds) {
 		rtv =  run_commands(C);
 
 	   // Call to run-command-epilogue (with return value)
-		run_command_epilogue(cmds, C, rtv);
+		run_command_epilogue(cmds, rtv);
 		
 
 		free_cmd(C);
@@ -2876,6 +2915,33 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				C->next = process_token_list(Argv + i, in, out, err);
 				return C;
 			}
+			else if (!strcmp(Argv[i], andsep)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				i++;
+				if (C->or_next) {
+					report_error(0, "Both || and && were used to separate this command from the previous one!", NULL);
+					C->errcond = 1;
+					return C;
+				}
+				C->argv[C->argc+1] = 0;
+				C->and_next = 1;
+				C->next = process_token_list(Argv + i, in, out, err);
+				return C;
+			}
+			else if (!strcmp(Argv[i], orsep)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
+				i++;
+				if (C->and_next) {
+					report_error(0, "Both && and '' were used to separate this command from the previous one!", NULL);
+					C->errcond = 1;
+					return C;
+				}
+				C->argv[C->argc+1] = 0;
+				C->or_next = 1;
+				C->and_next = 0;
+				C->next = process_token_list(Argv + i, in, out, err);
+				return C;
+			}
 			else if (!strcmp(Argv[i], begblock)) {
 				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
 				i++;
@@ -2937,6 +3003,14 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 
 #define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {	\
 				if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
+
+
+
+
+
+
+
+
 
 
 
@@ -3580,11 +3654,12 @@ sexp run_commands(cmd_t *cmd) {
 		char *tcmd = completed_path(cmd->argv[0]);
 
 		if (!op && ((tcmd && isa_program(tcmd)) || cmd->run_scheme_expression)) {
+			if (!cmd->cmd) cmd->cmd = string_array_as_string(cmd->argc, cmd->argv);
 			Free(tcmd);
 
-			run_command_prologue(cmd->cmd, cmd);
+			run_command_prologue(cmd->cmd);
 			n = c_execute_single_process(cmd);
-			run_command_epilogue(cmd->cmd, cmd, sexp_make_integer(ctx,n));
+			run_command_epilogue(cmd->cmd, sexp_make_integer(ctx,n));
 			
 			if (!n) sn = SEXP_TRUE; // unix commands return 0 on success, we map this to "true"
 			else {
@@ -3596,14 +3671,15 @@ sexp run_commands(cmd_t *cmd) {
 #if !defined(dispatch_path)
 		else if (cmd->run_scheme_expression) { // This is a scheme expression or set of expressions to be run in a separate 
 			if (tcmd) Free(tcmd);
+			if (!cmd->cmd) cmd->cmd = string_array_as_string(cmd->argc, cmd->argv);
 			
 			begin {
 				char *s;
 				
 				printf("Scheme expression: %s ...\n", cmd->argv[0]);
-				run_command_prologue(cmd->cmd, cmd);
+				run_command_prologue(cmd->cmd);
 				s = dispatch_scheme_stuff(cmd);
-				run_command_epilogue(cmd->cmd, cmd, sexp_make_string(ctx,s,-1));
+				run_command_epilogue(cmd->cmd, sexp_make_string(ctx,s,-1));
 				printf("  ==> %s\n",s);
 				Free(s);
 			}
@@ -3657,14 +3733,32 @@ sexp run_commands(cmd_t *cmd) {
 	return sn;
 }
 
-/*--- Routines that have the potential to support *amazing* customisation */
 
-void run_command_prologue(char *cmds, cmd_t *C) {
-	// Need code here to call *igor-command-prologue*
+/*--- Routines that have the potential to support *amazing* customisation ... if they work */
+
+void run_command_prologue(char *cmds) {
+	sexp_gc_var2(prologue, str);
+	sexp_gc_preserve2(ctx,prologue, str);
+	str = SEXP_NULL;
+	if (cmds) {
+		str = sexp_cons(ctx, sexp_c_string(ctx,cmds, -1), str);
+		prologue = sexp_get_procedure(ctx, env, IGOR_COMMAND_PROLOGUE);
+		if (sexp_procedurep(prologue)) sexp_apply(ctx, prologue, str);
+	}
+	sexp_gc_release2(ctx);
 }
 
-void run_command_epilogue(char *cmds, cmd_t *C, sexp rv) {
-	// Need code here to call *igor-command-epilogue*
+void run_command_epilogue(char *cmds, sexp rv) {
+	sexp_gc_var2(epilogue, str);
+	sexp_gc_preserve2(ctx,epilogue, str);
+	str = SEXP_NULL;
+	if (cmds) {
+		str = sexp_cons(ctx, rv, str);
+		str = sexp_cons(ctx, sexp_c_string(ctx,cmds, -1), str);
+		epilogue = sexp_get_procedure(ctx, env, IGOR_COMMAND_EPILOGUE);
+		if (sexp_procedurep(epilogue)) sexp_apply(ctx, epilogue, str);
+	}
+	sexp_gc_release2(ctx);
 }
 
 
@@ -3712,8 +3806,9 @@ void command_loop(FILE *f) {
 			for (i = 0; argv &&  argv[i]; i++) {
 				Dprintf("** argv[%d] = %s\n",i, argv[i]);
 			}
-			
+
 			C = process_token_list(argv,0,1,2);
+
 			//write(1,C->argv[0], strlen(C->argv[0]));
 			//write(1,"\n",1);
 
@@ -4289,6 +4384,7 @@ int igor(int argc, char **argv) {
 	
 	add_magic(quotedlist);
 	add_magic(heredoc);
+   add_magic(not);
 	add_magic(andsep);
 	add_magic(orsep);
 	add_magic(outerrpipe);
