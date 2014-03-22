@@ -313,6 +313,7 @@ typedef struct CMD_T {
 	int run_scheme_expression;
 	int shuto, shute;
 	int bg;
+	int NOT; // indicate that the "truth" value returned should be complemented
 	struct CMD_T *next;
 } cmd_t;
 
@@ -394,7 +395,6 @@ char dquote = '"';
 char bquote = '`';
 
 char *quotedlist = "'(";
-char *heredoc = "<<";
 char *andsep = "&&";
 char *orsep = "||";
 char *stdouterrapp = "+>>&";
@@ -414,6 +414,7 @@ char *endblock = "}";
 char *shellcmd = "$(";
 char *varexpr = "${";
 char *comment = "#";
+char *not = "!"
 
 char *continuation_str = "\\";
 
@@ -2764,14 +2765,15 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 
 					return C;
 				}
-				else if (C->argv[0] && is_sexp(C->argv[0]) && !is_sexp(Argv[i])) { // an s-expression piping into a program
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					report_error(0, "'(sexp) | cmd' is not working yet", NULL);
-
-					C->next = process_token_list(Argv + i, in, out, err);
-					C->next->input_from_sexp = 1; C->output_to_sexp = 0;
-					return C;
-				}
+// This one works normally, 
+//				else if (C->argv[0] && is_sexp(C->argv[0]) && !is_sexp(Argv[i])) { // an s-expression piping into a program
+//					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
+//					report_error(0, "'(sexp) | cmd' is not working yet", NULL);
+//
+//					C->next = process_token_list(Argv + i, in, out, err);
+//					C->next->input_from_sexp = 1; C->output_to_sexp = 0;
+//					return C;
+//				}
 #endif
 				else {
 					int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
@@ -3548,6 +3550,7 @@ sexp run_commands(cmd_t *cmd) {
 		
 		// So what I need to do here is set up the current-*-ports for indicated scheme expressions (the underlying fds ought to be ok)
 
+/*****  Set the run_scheme_expression flag  appropriately  *****/ 
 		if (0);
 		else if (is_sexp(cmd->argv[0]) || (strchr("$'", cmd->argv[0][0]) && cmd->argv[0][1] == '('))  {
 #if defined(dispatch_path)
@@ -3571,6 +3574,8 @@ sexp run_commands(cmd_t *cmd) {
 			op = member(*cmd->argv, builtins);
 			Dprintf("Builtin function: %s\n", cmd->argv[0]);
 		}
+/*****  Now run the command  *****/
+
 
 		char *tcmd = completed_path(cmd->argv[0]);
 
@@ -3651,7 +3656,6 @@ sexp run_commands(cmd_t *cmd) {
 
 	return sn;
 }
-
 
 /*--- Routines that have the potential to support *amazing* customisation */
 
