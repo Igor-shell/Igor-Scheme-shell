@@ -224,6 +224,8 @@
 #define DAbort(msg) DAbort_i(msg,__FILE__, __LINE__)
 #define report_error(err, errormessage, ctx) report_error_i(err, errormessage, ctx, __FILE__, __LINE__) 
 
+#define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {	\
+				if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
 
 #define UNSET(var,bit) (var = ((var) & ~(bit)))
 #define SET(var,bit) (var = ((var) | (bit)))
@@ -349,6 +351,8 @@ extern char *exit_val_evaluate_scheme_expression(int emit, char *sexp, char *ins
 extern char *gets(char *);
 
 extern char *dispatch_scheme_stuff(cmd_t *cmd);
+
+extern char *dispatch_scheme(char **cmd);
 
 void close_up_shop();
 void run_command_prologue(char *cmds);
@@ -519,15 +523,14 @@ char *supporting_initialisation[] = {
 
 sexp igor_ctx() { return ctx;};
 sexp igor_env() { return env;};
-
+/*
 sexp sexp_current_input_port(sexp ctx) {
 	return sexp_eval_string(ctx,"(current-input-port)", -1, env);
 }
 sexp sexp_current_output_port(sexp ctx) {
 	return sexp_eval_string(ctx,"(current-output-port)", -1, env);
 }
-
-
+*/
 
 /*-- Error handling */
 
@@ -2206,7 +2209,9 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 	}
 }
 
+/*---  char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)   */
 /* This returns the exit value of the scheme expression */
+
 char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring) { // This returns an allocated string which ought to be freed (ultimately)
 	begin {
 		return strdup(sexp_string_data(sexp_write_to_string(ctx, sexp_eval_string(ctx, sexpr, -1, ENV))));
@@ -2229,8 +2234,8 @@ char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)
 	*/
 
 
-/*-- Parsing the command line  */
 
+/*-- Parsing the command line  */
 /*---  Tokenise the command line and return an array of elements */
 
 // This returns a null terminated array of strings (like argv)
@@ -2543,10 +2548,12 @@ char **word_expansion(char **argv, int *argc, int argix) {
 	return argv;
 }
 
-/*--- Convert the array of tokens into a command chain.  Sets up the redirections ... */
+
+/*--  process_token_list -- Convert the array of tokens into a command chain.  Sets up the redirections ... */
 
 cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 	int Argc;
+
 	int i = 0;
 	cmd_t *C = new_cmd_t();
 	char *fname = NULL;
@@ -2558,7 +2565,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 		//DPTprintf("DPT Argv[%d] = \"%s\"\n",Argc, Argv[Argc]);
 	}
 
-	C->argv = (char **)calloc(Argc+1, sizeof(char **));
+	C->argv = (char **)calloc(Argc+1, sizeof(char **)); // argv *must* be null terminated
 
 	C->in = in;
 	C->out = out;
@@ -2905,6 +2912,7 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				C->argv[C->argc+1] = 0;
 				C->bg = 1;
 				C->argv[C->argc] = 0;
+				
 				C->next = process_token_list(Argv + i, in, out, err);
 				return C;
 			}
@@ -3000,21 +3008,550 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 
 	return C;
 }
+	
+/*--  char **process_command_in_token_list(int execute, int emit, char **Argv, int In, int Out,int Err, char **inputstring, char **outputstring)   */
+// inputstring and outputstring are used when we are dealing with s-expressions
+/*
+#warning ---------------------------------------------------------------
+#warning I need to convert bare scheme expressions to a fork and print that
+#warning we can use to pipe into other things or ... stuff.
+#warning ---------------------------------------------------------------
+*/
+
+#if defined(NOT_EVEN_CLOSE_TO_WORKING_YET)
+
+
+char **process_command_in_token_list(int *ret, int execute, int emit, char **Argv, int In, int Out,int Err, char **inputstring, char **outputstring) { 
+/*--- ISSUES: Passing back return values, managing the way Argv steps through the array of tokens across nested invocations
+ */
+	int Argc;
+
+	char **argv = NULL;
+	int argc = 0, run_scheme_expression = 0, errcond = 0;
+	int next = 0;
+
+	int in, out, err, bg = 0;
+	int i = 0;
+	cmd_t *C = new_cmd_t();
+	char *fname = NULL;
+
+	for (Argc = 0; Argv[Argc]; Argc++) {
+		//char *s = Argv[Argc];
+		//if (is_magic(s) || strchr("(),|&;<>{}", *s)) continue;
+
+		//DPTprintf("DPT Argv[%d] = \"%s\"\n",Argc, Argv[Argc]);
+	}
+
+	argv = (char **)calloc(Argc+1, sizeof(char **));
+
+	in = In;
+	out = Out;
+	err = Err;
+
+	
+/*---  loop over tokens in list till we hit the end of a command/s-expression   */
+
+	for (i = 0; Argv && i < Argc; i++) {
+		if (!Argv[i] || !Argv[i][0]) continue;
+
+/*----  We've hit a symbol or the beginning of a literal list....*/
+  if (is_magic(Argv[i])) {
+			if (0) {}
+			//else if (!strcmp("(,", *Argv[i])) { // Catch the scheme stuff early
+			//}
+
+/*----- handle a quoted list, send it to c_execute */
+  			else if (!strncmp(Argv[i], quotedlist, strlen(quotedlist)) || !strncmp(Argv[i], shellcmd, strlen(shellcmd))) {
+			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", 
+					__FUNCTION__, 
+					__LINE__, 
+					Argv[i], 
+					(C && argv && *argv[0]) ? argv[0] : "(none)");
+
+				argv[argc++] = Argv[i];
+				argv[argc] = 0;
+				c_execute(1, 0, Argv, in, out, err, inputstring ? *inputstring : NULL);
+			}
+
+/*----- heredoc -- not implemented */
+			else if (!strcmp(Argv[i], heredoc)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				report_error(0,"here documents not supported yet", NULL);
+				*ret = errcond = 255;
+				return Argv+i;
+			}
+
+/*----- open a file for standard out to append to */
+			else if (!strcmp(Argv[i], stdoutapp)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to append stdout to!", NULL);
+					*ret = errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					out = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (out < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+			}
+
+/*----- open a file for stderr to append to */
+			else if (!strcmp(Argv[i], stderrapp)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to append stderr to!", NULL);
+					*ret =  errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (err < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+			}
+
+/*----- open a file for both stdout and stderr to append to */
+			else if (!strcmp(Argv[i], stdouterrapp)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to append stdout and stderr to!", NULL);
+					*ret  = errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					out = err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (out < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+			}
+/*----- open a file to take stdin from */
+			else if (!strcmp(Argv[i], stdinredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to read as stdin!", NULL);
+
+					*ret = errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					in = open(fname, O_RDONLY);
+					if (in < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+				
+			}
+
+/*----- open a file to write stdout to */
+  
+			else if (!strcmp(Argv[i], stdoutredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to write stdout to!", NULL);
+					*ret = errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					if (access(fname,F_OK) == Ok) unlink(fname);
+					out = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (out < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+			}
+
+/*----- open a file to write stderr to */
+			else if (!strcmp(Argv[i], stderredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to write stderr to!", NULL);
+					*ret = errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					if (access(Argv[i], F_OK) == Ok) unlink(fname);
+					err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (err < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+			}
+
+/*----- open a file to write both stdout and stderr to */
+			else if (!strcmp(Argv[i], stdouterredir)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (i >= Argc) {
+					report_error(0,"No filename specified to write stderr to!", NULL);
+					*ret = errcond = 1;
+					return Argv+i;
+				}
+
+				fname = handle_filename(Argv[i]);
+				Free(Argv[i]);
+
+				//i++;
+				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				if (fname && *fname) {
+					if (access(fname, F_OK) == Ok) unlink(fname);
+					out = err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
+					if (out < 0) {
+						errcond = 1;
+						report_error(errno, "Unable to open file", fname);
+					}
+					free(fname);
+				}
+				else errcond = 1;
+			}
+
+			
+/********************  The following bits may execute commands ********************/
+/*----- we have a thing that is piping stdout to another thing */
+			else if (!strcmp(Argv[i], outpipe)) {
+				i++;
+				/*** NEED TO MAKE THIS WORK, NEED TO MAKE THE REMAINING TWO CASES WORK  ***/
+
+				if (0) {;}
+
+/*------ this s-expression is piping into another s-expression  */
+				else if (argv[0] && is_sexp(argv[0]) && is_sexp(Argv[i])) {
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+
+					if (execute) *outputstring = evaluate_scheme_expression(emit, argv[0], *inputstring);
+					if (inputstring && *inputstring) {Free(*inputstring); inputstring = NULL;} // consume input string
+
+					Argv = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+### HERE ###					Argc
+				}
+
+/*------ this program is piping into an s-expression  */
+				else if (argv[0] && !is_sexp(argv[0]) && is_sexp(Argv[i])) { 
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					report_error(0, "'cmd | (sexp)' is not working yet", NULL);
+
+					if (inputstring && *inputstring) {
+						if (in != In) {
+							// there is some error here!
+							errcond = 1;
+							report_error(255, "Huh? A program seemingly has a redirected input file as well as an input string:", inputstring);
+						}
+					}
+
+					if (execute) *outputstring = c_execute(0, , Argv, in, out, err, inputstring ? *inputstring : NULL);
+					if (inputstring && *inputstring) {Free(*inputstring); inputstring = NULL;} // consume input string
+
+					next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+
+					return errcond;
+				}
+/*------ this s-expression is piping into a program  */
+#if 0 // Seems to work without this....
+				else if (argv[0] && is_sexp(argv[0]) && !is_sexp(Argv[i])) { 
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					report_error(0, "'(sexp) | cmd' is not working yet", NULL);
+
+					next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+					return errcond;
+				}
+#endif
+/*------ this program is piping to another program  */
+				else {
+					int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
+					//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+
+					if (i >= Argc) {
+						report_error(0, "Nothing specified to write stdout to!", NULL);
+						errcond = 1;
+						return errcond;
+					}
+					if (inputstring && *inputstring) {
+						if (in != In) {
+							// there is some error here!
+							errcond = 1;
+							report_error(255, "Huh? A program seemingly has a redirected input file as well as an input string:", inputstring);
+						}
+					}
+
+					argv[argc] = 0;
+					
+					pipe(pipefd);
+					out = pipefd[1];
+
+					errcond = c_execute(execute, 0, Argv, in, out, err, NULL);
+					
+					next = process_command_in_token_list(&ret, execute, emit, Argv + i, pipefd[0], out, err, outputstring, NULL);
+					return errcond;
+				}
+			}
+
+/*----- we have a thing that is piping stderr to another thing */
+			else if (!strcmp(Argv[i], errpipe)) {
+				i++;
+				if (argv[0] && is_sexp(argv[0]) && is_sexp(Argv[i])) { // both the command that we've been collecting and the next are s-exprs
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					fprintf(stderr,"\nBOINK\n");
+
+				}
+				else if (argv[0] && !is_sexp(argv[0]) && is_sexp(Argv[i])) {
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					fprintf(stderr,"\nBOINK\n");
+
+				}
+				else if (argv[0] && is_sexp(argv[0]) && !is_sexp(Argv[i])) {
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					fprintf(stderr,"\nBOINK\n");
+
+				}
+				else {
+					int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
+					DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+					if (i >= Argc) {
+						report_error(0, "Nothing specified to write stderr to!", NULL);
+						errcond = 1;
+						return errcond;
+					}
+					argv[argc] = 0;
+				
+					pipe(pipefd);
+
+					err = pipefd[1];
+					next = process_command_in_token_list(&ret, execute, emit, Argv + i, pipefd[0], out, err, outputstring, NULL);
+					return errcond;
+				}
+			}
+
+/*----- we have a thing that is piping both stdout and stderr to another thing */
+			else if (!strcmp(Argv[i], outerrpipe)) {
+				if (argv[0] && is_sexp(argv[0]) && is_sexp(Argv[i])) { // both the command that we've been collecting and the next are s-exprs
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					fprintf(stderr,"\nBOINK\n");
+				
+				}
+				else if (argv[0] && !is_sexp(argv[0]) && is_sexp(Argv[i])) {
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					fprintf(stderr,"\nBOINK\n");
+					
+				}
+				else if (argv[0] && is_sexp(argv[0]) && !is_sexp(Argv[i])) {
+					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
+					fprintf(stderr,"\nBOINK\n");
+					
+				}
+				else {
+					int pipefd[2]; // you read from pipefd[0] and write to pipefd[1]
+					DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+					i++;
+					if (i >= Argc) {
+						report_error(0,"Nothing specified to write stdout and stderr to!", NULL);
+						errcond = 1;
+						return errcond;
+					}
+					argv[argc] = 0;
+				
+					pipe(pipefd);
+
+					out = err = pipefd[1];
+					next = process_command_in_token_list(&ret, execute, emit, Argv + i, pipefd[0], out, err, outputstring, NULL);
+					return errcond;
+				}
+			}
+
+/*----- make the command run in the background */
+			else if (!strcmp(Argv[i], makebg)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				argv[argc+1] = 0;
+				bg = 1;
+				argv[argc] = 0;
+				//next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+				return errcond;
+			}
+
+/*----- Finished with the command, execute it begin processing the next one */
+			else if (!strcmp(Argv[i], nextsep)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				argv[argc+1] = 0;
+				next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+				return errcond;
+			}
+
+/*----- NEED A NEGATION FLAG FOR THE STATE OF THE COMMAND */
+
+/*----- Finished with the command, execute it, if this one failed set the execute flag to false, begin processing the next one  */
+			else if (!strcmp(Argv[i], andsep)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				if (or_next) {
+					report_error(0, "Both || and && were used to separate this command from the previous one!", NULL);
+					errcond = 1;
+					return errcond;
+				}
+				argv[argc+1] = 0;
+				and_next = 1;
+				next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+				return errcond;
+			}
+/*----- Finished with the command, execute it, if this one succeeded set the execute flag to false, begin processing the next one  */
+			else if (!strcmp(Argv[i], orsep)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				if (and_next) {
+					report_error(0, "Both && and '' were used to separate this command from the previous one!", NULL);
+					errcond = 1;
+					return errcond;
+				}
+				argv[argc+1] = 0;
+				or_next = 1;
+				and_next = 0;
+				next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
+				return errcond;
+			}
+
+/*----- Start a command block */
+			else if (!strcmp(Argv[i], begblock)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				report_error(0, "No blocks yet, sorry", NULL);
+				errcond = 3;
+				return errcond;
+			}
+
+/*----- Finish a command block */
+			else if (!strcmp(Argv[i], endblock)) {
+				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+				i++;
+				report_error(0,"Missing begin block!", NULL);
+				errcond = 4;
+				
+				return errcond;
+			}
+
+/********************  The preceding bits may execute commands ********************/
+
+		}
+		else {
+			char **tmp; 
+//			DPTprintf("Assigning \"%s\" to argv[%d]\n", Argv[i], argc);
+			argv[argc++] = Argv[i];
+			argv[argc] = 0;
+			tmp = word_expansion(argv, &(argc), argc-1);
+			if (tmp) argv = tmp;
+		}
+
+//		DPTprintf("{Argv[%d] = \"%s\"  &  ", i, Argv[i]);
+//		DPTprintf("argv[%d] = \"%s\"  is_sexp() = %d //  ", 0, argv[0], is_sexp(argv[0]));
+//		DPTprintf("Argv[%d] = \"%s\" %p}\n", i+1, Argv[i+1], Argv[i+1]);
+
+		// if the first thing in the list is an s-expression and the *next thing in the list is an s-expression
+		if (is_sexp(argv[0]) && argc == 1 && (!Argv[i+1] || (Argv[i] && is_sexp(Argv[i+1])))) { 
+			int k;
+			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
+			i++; // We *do not* increment here, because i already points to the right spot
+			if (Argv[i] && *Argv[i]) {
+				DPTprintf("%s:%d -- which will be followed by %s\n", __FUNCTION__, __LINE__, Argv[i]);
+			}
+			
+//			for (k = 0; k < argc; k++) {
+//				DPTprintf("  [%d] %s\n", k, argv[k]);
+//			}
+
+			// EXECUTE THE COMMAND IF THE FLAG PERMITS
+
+			return errcond;
+		}
+
+		if (0) {
+			int j;
+			if (argc > 0) {
+				printf("command = %s", argv[0]);
+				for (j = 1; argv[j]; j++) printf(" %s", argv[j]);
+				printf("\n");
+			}
+		}
+	}
+
+	return errcond;
+}
+
+#endif
 
 #define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {	\
 				if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
 
 
-
-
-
-
-
-
-
-
-
-/*--- Execute a builtin function */
+/*-- Execute a builtin function */
 
 sexp execute_builtin(cmd_t *command, Builtin *op, char **argv, int input, int output) {
 	char *inputstring = NULL;
@@ -3393,19 +3930,13 @@ int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char
 }
 
 
-/*--- Execute a single command -- C dispatch function */
+/*--- Execute a command -- C dispatch function */
 
-//int c_execute_single_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) 
-int c_execute_single_process(cmd_t *command) {
+
+int c_execute(int run_scheme_expression, int in_the_background, char **argv, int input, int output, int error, char *inputstring) {
 	int procid = -1;
 	//char *ss = NULL;
-	char *cmd = *command->argv;
-	int in_the_background = command->bg;
-	char **argv = command->argv;
-	//char *inputstring = command->inputstring;
-	int input = command->in;
-	int output = command->out;
-	int error = command->err;
+	char *cmd = *argv;
 
 	char *returnstr = NULL;
 
@@ -3430,8 +3961,8 @@ int c_execute_single_process(cmd_t *command) {
 	ifewsxz (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
 
 
-	if (command->run_scheme_expression) {
-		returnstr = dispatch_scheme_stuff(command);
+	if (run_scheme_expression) {
+		returnstr = dispatch_scheme(argv);
 	}
 
 
@@ -3475,7 +4006,7 @@ int c_execute_single_process(cmd_t *command) {
 		signal(SIGCHLD, &signalhandler);
 		signal(SIGTTIN, SIG_DFL);
 		
-		if (!command->run_scheme_expression) {
+		if (!run_scheme_expression) {
 			if (1) {
 				int i;
 				for (i = 1; argv[i]; i++) {
@@ -3550,7 +4081,40 @@ int c_execute_single_process(cmd_t *command) {
 	}
 }
 
+
+/*--- Execute a single command -- C dispatch function */
+
+
+//int c_execute_single_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) 
+int c_execute_single_process(cmd_t *command) {
+	return c_execute(command->run_scheme_expression, command->bg, command->argv, command->in, command->out, command->err, command->inputstring);
+}
+
+
+
 /*--- Dispatch a scheme command */
+
+char *dispatch_scheme(char **argv) {// argv must be a null terminated array
+	// iterate through the argv[i] and execute them in order, capturing the output and appendiing it to the string which will be returned.
+	int i;
+	char *returns = NULL;
+	
+
+	for  (i = 0; argv && argv[i]; i++) {
+		char *component = evaluate_scheme_expression(1, argv[i], NULL);
+		if (!returns) {
+			returns = component;
+		}
+		else if (component) {
+			returns = (char *)realloc(returns, strlen(returns) + strlen(component) + 2);
+			strcat(returns, " ");
+			strcat(returns, component);
+			Free(component);
+		}
+		else Free(component);
+	}
+	return returns;		
+}
 
 char *dispatch_scheme_stuff(cmd_t *command) {
 	// iterate through the argv[i] and execute them in order, capturing the output and appendiing it to the string which will be returned.
@@ -3596,7 +4160,7 @@ char *dispatch_scheme_stuff(cmd_t *command) {
 
 		
 
-/*--- Run a chain of commands  */
+/*--- Run a chain of commands -- doesn't support && ||  */
 
 sexp run_commands(cmd_t *cmd) {
 	//static sexp inp = SEXP_FALSE, outp = SEXP_FALSE, errp = SEXP_FALSE;
@@ -3732,6 +4296,157 @@ sexp run_commands(cmd_t *cmd) {
 
 	return sn;
 }
+
+
+/*--- run_recursive_descent routines */
+
+
+
+
+char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by the end of the s-expression
+	return NULL;
+}
+
+char **simple_command(char **argv, sexp *rv, int excmd) { // terminated  by ";" "&&" "||" "&" or "}", as long as there is no "${"
+	return NULL;
+}
+
+
+char **simple_chain(char **argv, sexp *rv, int excmd) { 
+#if 1
+	/* 
+		Most of the heavy lifting (apart from redirections and such) is
+		done here.
+
+		If it's a command, run simple_command, else if it is an
+		s-expression, run simple-sexpression.  This routine maps returns
+		of zero to #t and error returns set rv to #f and the global
+		error state to the appropriate value.
+
+		Things that start with a backquote are treated as commands that
+		will be expanded and then executed (as either a command or s-exp).
+		
+		Things that start with $ are treated as commands that need
+		expansion before execution.
+
+		Things that start as ,(....) are s-expressions that
+		are expanded and *then* run as s-expressions.
+
+		Things that start as ,@(....) are s-expressions that
+		are expanded and *then* run as commands
+
+	 */
+
+
+
+
+
+
+	argv = simple_chain(argv, rv, excmd);
+	
+	if (argv && !strcmp(*argv, nextsep)) {
+		argv++; // consume "&&"
+		argv = simple_chain(argv, rv, excmd);
+	}
+#else
+	for {;argv && *argv;) {
+		argv = simple_chain(argv, rv, excmd);
+		if (!argv || strcmp(*argv, nextsep)) break
+	} 
+#endif
+	return argv;
+}
+
+
+
+/*
+and-chain ---> returns the last exit value, stops on failure
+
+   __ simple-chain _______________________________________________________
+                        \ __ && __ and-chain __/
+
+*/
+
+char **and_chain(char **argv, sexp *rv, int excmd) {
+
+	argv = simple_chain(argv, rv, excmd);
+	if (rv && excmd && sexp_equalp(ctx, *rv, SEXP_FALSE)) excmd = 0;
+	
+	if (argv && !strcmp(*argv, andsep)) {
+		argv++; // consume "&&"
+		argv = and_chain(argv, rv, excmd);
+	}
+
+	return argv;
+}
+
+
+/*
+or-chain  ---> returns the last exit value, stops on success
+
+  ___ and-chain  _________________________________________________________
+                    \ __ || __ or-chain__/
+*/
+
+char **or_chain(char **argv, sexp *rv, int excmd) {
+	
+
+	argv = and_chain(argv, rv, excmd);
+	if (rv && excmd && sexp_equalp(ctx, *rv, SEXP_TRUE)) excmd = 0;
+	
+	if (argv && !strcmp(*argv, orsep)) {
+		argv++; // consume "||"
+		argv = or_chain(argv, rv, excmd);
+	}
+
+	return argv;
+}
+
+
+
+
+
+/*
+command-block --> returns whatever comes out
+
+  ___ or-chain ___________________________________________________________
+    \__ { _______ command-block _______ } _________________________/
+
+
+*/
+
+char **command_block(char **argv, sexp *rv, int excmd) { 
+//	char **av = argv;
+
+	if (!argv || !*argv) return NULL;
+
+	if (strcmp(*argv, begblock)) {
+		if (rv) argv = or_chain(argv, rv, excmd);
+		else argv = or_chain(argv, NULL, excmd);
+	}
+	else {
+		argv++; // consume beginning delimiter
+		argv = or_chain(argv, rv,excmd);
+
+		//if (rv && excmd && sexp_equalp(ctx, *rv, SEXP_FALSE)) excmd = 0;
+
+		if (!argv || !*argv) {
+			report_error(0,"Missing end of block", NULL);
+			return NULL;
+		}
+		else argv++; // consume final delimiter
+	}
+	return argv;
+}
+
+
+cmd_t *run_recursive_descent(cmd_t *cmd) {
+	
+	return NULL;
+}	
+
+
+
 
 
 /*--- Routines that have the potential to support *amazing* customisation ... if they work */

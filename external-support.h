@@ -117,8 +117,10 @@ extern cmd_t *new_cmd_t();
 extern void free_cmd(cmd_t *p);
 extern void free_null_terminated_pointer_array(char **ptr);
 extern sexp argv_to_list(sexp ctx, char **argv, int n);
+/*
 extern sexp sexp_current_input_port(sexp ctx);
 extern sexp sexp_current_output_port(sexp ctx);
+*/
 extern char *guard_definitions(char *s);
 		
 extern void igor_set(sexp ctx, char *variable, char *value);
