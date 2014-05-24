@@ -43,6 +43,7 @@ SRCS = $(OBJS:.o=.c)
 # TODO: use auto-detection from chibi's Makefile
 SO ?= so
 
+it:	install-links-gentoo install
 
 
 igor: igor.c es.sld es.$(SO) 
@@ -69,15 +70,15 @@ install-lib: libexternal-support.$(SO)
 	sudo install -D --group=root --owner=root --mode=755 libexternal-support.so $(LOCALLIBDIR)
 
 install-links-gentoo: install-lib install
-	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
-	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBISHAREDIR)/local
+	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBISHAREDIR)/local
 	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBDIR)/local
 	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/local
 
 # for local modifications
 install-links-no-really: install-lib install
-	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
-	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBILIBDIR)/local
+	sudo mkdir -p $(CHIBILIBDIR)/local $(CHIBISHAREDIR)/local
+	sudo chmod a+rx $(CHIBILIBDIR)/local $(CHIBISHAREDIR)/local
 	sudo install -D --group=root --owner=root --mode=755 es.so $(CHIBILIBDIR)/local
 	sudo install -D --group=root --owner=root --mode=755 es.sld es.scm $(CHIBISHAREDIR)/local
 

@@ -2343,10 +2343,26 @@ char **tokenise_cmdline(char *cmdline) {
 		}
 
 		else if (!strncmp(cp, varexpr, strlen(varexpr))) {
+#if 0
 			cp = jump_fence_c(cp, collecting, '}', escape, 0); /* This refers to an explicit substitution  using a program with arguments */
 			i = strlen(collecting);
-		}
+#else
+			char *ts = NULL;
+			cp = jump_fence_c(cp, collecting, '}', escape, 0); /* This refers to an explicit substitution  using a program with arguments */
+			
+			i = strlen(collecting);
 
+			if (i <= 3) strcpy(collecting,"${}");
+			else {
+				collecting[i-1] = 0;
+				ts = backquote_system_call(collecting+2);
+				strcpy(collecting, "$");
+				strcat(collecting, ts);
+			}
+			i = strlen(collecting);
+			Free(ts);
+#endif
+		}
 		else if (*cp == bquote) { /* This refers to an explicit substitution  using a program with arguments */
 			cp = jump_fence_c(cp, collecting, bquote, escape, 0); /* do not eat the backquotes -- wordexp will deal with it */
 			// cp = jump_fence_c(cp, collecting, bquote, escape, 1);
@@ -2366,6 +2382,69 @@ char **tokenise_cmdline(char *cmdline) {
 			cp = tcp;
 			
 		}
+
+
+/***** THESE NEED TO BE SET AS SHEME VARIABLES TOO *****/
+
+		// must come after the s-expressions have been jumped so that the scheme variables are used.in s-expressions
+
+		else if (!strncmp(cp, "$#", 2)) { // number of args in commandline of script (apart from cmd)
+		   cp += 2;                       // this needs to be explicit  so the hash isn't interpreted as a comment
+			
+			strcpy(collecting, "$#");
+			i = strlen(collecting);
+		}
+
+		else if (!strncmp(cp, "$?", 2)) { // Nothing, not replaced ** [bash uses this for status of last pipeline]
+			cp += 2;
+			
+			strcpy(collecting, "$?");
+			i = strlen(collecting);
+		}
+
+		else if (!strncmp(cp, "$-", 2)) {  // Nothing, not replaced ** [bash uses this for current  option  flags]
+			cp += 2;
+			
+			strcpy(collecting, "$-");
+			i = strlen(collecting);
+		}
+
+		else if (!strncmp(cp, "$!", 2)) { // pid of last backgrounded command (do the $!-3 thing?)
+			cp += 2;
+			
+			strcpy(collecting, "$!");
+			i = strlen(collecting);
+		}
+
+#if 1
+		else if (!strncmp(cp, "$@", 2)) { // command line args $1 ...
+			cp += 2;
+			
+			strcpy(collecting, "$@");
+			i = strlen(collecting);
+		}
+
+		else if (!strncmp(cp, "$*", 2)) { // command line args $1 ...
+			cp += 2;
+			
+			strcpy(collecting, "$*");
+			i = strlen(collecting);
+		}
+
+		else if (!strncmp(cp, "$0", 2)) { // name/path of shell/script
+			cp += 2;
+			
+			strcpy(collecting, "$0");
+			i = strlen(collecting);
+		}
+
+		else if (!strncmp(cp, "$$", 2)) { // pid of this process
+			cp += 2;
+			
+			strcpy(collecting, "$$");
+			i = strlen(collecting);
+		}
+#endif
 
 		else {
 			char *ims = is_magic(cp);
@@ -2431,6 +2510,17 @@ char **tokenise_cmdline(char *cmdline) {
 					*cp = 0;
 				}
 
+				else if (!strncmp(cp, varexpr, strlen(varexpr))) {
+#if 0
+					cp = jump_fence_c(cp, collecting, '}', escape, 0); /* This refers to an explicit substitution  using a program with arguments */
+					i = strlen(collecting);
+#else
+					cp = jump_fence_c(cp, collecting, '}', escape, 0); /* This refers to an explicit substitution  using a program with arguments */
+					i = strlen(collecting);
+			
+					printf("#### collecting = [%s]\n", collecting);
+#endif
+				}
 				else {
 					//argv[argc++] = strdup(ims);
 					argv[argc++] = ims;
@@ -2966,8 +3056,13 @@ cmd_t *process_token_list(char **Argv, int in, int out,int err) {
 				return C;
 			}
 		}
-		else {
+		else { // normal string or special ($@, $*, $#, $?, $-, $$, $!, $0)
 			char **tmp; 
+
+
+
+
+
 //			DPTprintf("Assigning \"%s\" to C->argv[%d]\n", Argv[i], C->argc);
 			C->argv[C->argc++] = Argv[i];
 			C->argv[C->argc] = 0;
@@ -4307,13 +4402,12 @@ char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by t
 	return NULL;
 }
 
-char **simple_command(char **argv, sexp *rv, int excmd) { // terminated  by ";" "&&" "||" "&" or "}", as long as there is no "${"
+char **simple_command(char **argv, sexp *rv, int excmd) { // terminated  by ";" "&&" "||" "&", or "}" (there should be no matching "${")
 	return NULL;
 }
 
 
 char **simple_chain(char **argv, sexp *rv, int excmd) { 
-#if 1
 	/* 
 		Most of the heavy lifting (apart from redirections and such) is
 		done here.
@@ -4336,20 +4430,23 @@ char **simple_chain(char **argv, sexp *rv, int excmd) {
 		are expanded and *then* run as commands
 
 	 */
-
-
-
-
-
-
+#if 1
 	argv = simple_chain(argv, rv, excmd);
 	
 	if (argv && !strcmp(*argv, nextsep)) {
-		argv++; // consume "&&"
 		argv = simple_chain(argv, rv, excmd);
 	}
 #else
 	for {;argv && *argv;) {
+		if (argv && *argv) {
+			if (is_sexp(*argv)) {
+				argv = simple_sexpression(argv,rv,excmd);
+			}
+			else {
+				argv = simple_command(argv,rv,excmd);
+			}
+		}
+		
 		argv = simple_chain(argv, rv, excmd);
 		if (!argv || strcmp(*argv, nextsep)) break
 	} 
