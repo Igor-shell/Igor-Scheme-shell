@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
 
   preignition();
 
-  initialise_interpreter();
+  initialise_interpreter(argc, argv);
 
   ctx = igor_ctx();
   env = igor_env(ctx);

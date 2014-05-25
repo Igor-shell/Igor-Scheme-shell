@@ -446,7 +446,8 @@ process_list_t  *proclist  = NULL;
 int proclist_size = 0;
 int n_procs = 0;
 
-
+/****  the $$ variables need finishing ****/
+ 
 
 /*----   array of initialisation sexps  */
 
@@ -483,6 +484,15 @@ char *supporting_initialisation[] = {
 	"(define " IGOR_VERSION_VAR "  \'" IGOR_VERSION ")",
 	"(define *running-script* 0)",
 	"(define *last_igor_eval* \"\")",
+	"(define semicolon-is-separator #t)",
+	"(define $@ #f)",
+	"(define $* #f)",
+	"(define $? #f)",
+	"(define $- #f)",
+	"(define $$ #f)",
+	"(define $! #f)",
+	"(define $0 #f)",
+	"(define semicolon-is-separator #t)",
 	"(define " IGOR_TRACKING_LIST_VAR " (list))",
 	"(define (" IGOR_TRACKING_FUNCTION_VAR " args) (apply dnl args)))",
 	"(define (dnl . args) (if (null? args) (display "") (let () (map display args) (newline))))",
@@ -2384,7 +2394,7 @@ char **tokenise_cmdline(char *cmdline) {
 		}
 
 
-/***** THESE NEED TO BE SET AS SHEME VARIABLES TOO *****/
+/***** THESE NEED TO BE SET AS SCHEME VARIABLES TOO *****/
 
 		// must come after the s-expressions have been jumped so that the scheme variables are used.in s-expressions
 
@@ -2417,14 +2427,14 @@ char **tokenise_cmdline(char *cmdline) {
 		}
 
 #if 1
-		else if (!strncmp(cp, "$@", 2)) { // command line args $1 ...
+		else if (!strncmp(cp, "$@", 2)) { // command line args $1 ... arguably as array of strings
 			cp += 2;
 			
 			strcpy(collecting, "$@");
 			i = strlen(collecting);
 		}
 
-		else if (!strncmp(cp, "$*", 2)) { // command line args $1 ...
+		else if (!strncmp(cp, "$*", 2)) { // command line args $1 ... arguably as one string with spaces
 			cp += 2;
 			
 			strcpy(collecting, "$*");
@@ -4068,11 +4078,20 @@ int c_execute(int run_scheme_expression, int in_the_background, char **argv, int
 		int cid = 0;
 		int cstate;
 
+
+
 		if (!in_the_background) {
 			cid = waitpid(procid, &cstate, 0);
 			//waitpid(procid, &cstate, 0);
 		}
 		else if (in_the_background) {
+			char *bgpid;
+			asprintf(&bgpid,"%d",procid);
+			if (bgpid) {
+				igor_set(ctx,"$!", bgpid);
+				free(bgpid);
+			}
+			
 			fprintf(stderr,"[started background process: %s]\n", cmd);
 		}
 
@@ -4403,11 +4422,23 @@ char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by t
 }
 
 char **simple_command(char **argv, sexp *rv, int excmd) { // terminated  by ";" "&&" "||" "&", or "}" (there should be no matching "${")
+	char **a;//, **c;
+
+	// I am sure this is wrong, but we are just trying to get things going to start with
+	// NB: You can have an s-expression as an argument to a command!
+
+	for (a = argv; *a && !(!strcmp(*a, nextsep) || !strcmp(*a, andsep) || !strcmp(*a, orsep) || !strcmp(*a, makebg) || !strcmp(*a, begblock) || !strcmp(*a, endblock)); a++);
+	
+	
+
 	return NULL;
 }
 
+#define SIS_CHANGE_WITHIN_CHAIN
 
 char **simple_chain(char **argv, sexp *rv, int excmd) { 
+	sexp sis;
+	int sisi = 1;
 	/* 
 		Most of the heavy lifting (apart from redirections and such) is
 		done here.
@@ -4417,12 +4448,6 @@ char **simple_chain(char **argv, sexp *rv, int excmd) {
 		of zero to #t and error returns set rv to #f and the global
 		error state to the appropriate value.
 
-		Things that start with a backquote are treated as commands that
-		will be expanded and then executed (as either a command or s-exp).
-		
-		Things that start with $ are treated as commands that need
-		expansion before execution.
-
 		Things that start as ,(....) are s-expressions that
 		are expanded and *then* run as s-expressions.
 
@@ -4430,26 +4455,44 @@ char **simple_chain(char **argv, sexp *rv, int excmd) {
 		are expanded and *then* run as commands
 
 	 */
-#if 1
+
+#if 0
 	argv = simple_chain(argv, rv, excmd);
 	
 	if (argv && !strcmp(*argv, nextsep)) {
 		argv = simple_chain(argv, rv, excmd);
 	}
 #else
-	for {;argv && *argv;) {
+
+	sis = sexp_eval_string(ctx,"semicolon-is-separator", -1, env);
+	sisi = (sexp_equalp(ctx, sis, SEXP_FALSE)) ? 0 : 1;
+
+	for (;argv && *argv;) {
 		if (argv && *argv) {
+			if (!strcmp(*argv, nextsep)) {
+				if (sisi) {
+					argv++;
+					continue;
+				}
+				else { // we have hit a semicolon and it is a comment symbol
+				   // skip to the end  of the argv  array and return
+					for (; *argv; argv++);
+					return argv;
+				}
+			}
+
 			if (is_sexp(*argv)) {
 				argv = simple_sexpression(argv,rv,excmd);
-			}
+					}
 			else {
 				argv = simple_command(argv,rv,excmd);
 			}
 		}
-		
-		argv = simple_chain(argv, rv, excmd);
-		if (!argv || strcmp(*argv, nextsep)) break
-	} 
+#if defined(SIS_CHANGE_WITHIN_CHAIN)
+		sis = sexp_eval_string(ctx,"semicolon-is-separator", -1, env);
+		sisi = (sexp_equalp(ctx, sis, SEXP_FALSE)) ? 0 : 1;
+#endif
+	}
 #endif
 	return argv;
 }
@@ -5080,9 +5123,35 @@ void preignition() {
 }
 
 
+void set_special_vars(int argc, char **argv, int pid) {
+	char *str = NULL;
+
+   asprintf(&str, "%d", pid);
+	igor_set(ctx,"$$", str);
+	Free(str);
+
+   asprintf(&str, "%d", argc-1);
+	igor_set(ctx,"$#", str);
+	Free(str);
+
+	if (argc > 0) igor_set(ctx,"$0", argv[0]);
+	else igor_set(ctx,"$0", "");
+	
+	igor_set(ctx,"$!", "-1"); // no "last backgrounded job"
+	igor_set(ctx,"$-", "#f"); // no last pipline status
+
+	if (pid >= 0) igor_set(ctx,"$?", "0");  // last pipeline is fine
+	
+
+	/**** FIX THIS ****/
+	igor_set(ctx,"$@", ""); // no "last backgrounded job"
+	igor_set(ctx,"*", ""); // no "last backgrounded job"
+}
 
 
-void initialise_interpreter() {
+
+
+void initialise_interpreter(int argc, char **argv) {
 	sexp res = SEXP_FALSE;
 	char **ss;
 
@@ -5139,6 +5208,8 @@ void initialise_interpreter() {
 	  printf("   DONE\n");
 #endif
   }
+
+  set_special_vars(argc, argv, getpid());
 
 #if defined(BOOTSTRAP)
   begin {
@@ -5397,3 +5468,4 @@ sexp sexp_unset_env_var(sexp ctx, char *str) {
 
 
 /*-  The End  */
+
