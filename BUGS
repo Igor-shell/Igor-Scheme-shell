@@ -120,3 +120,11 @@ The command
 doesn't print the symbol 'abc We certainly need to check strings like
 "Run Me" for their presence, but (by fiat) we insist that a single
 quote is a scheme symbol
+
+
+
+
+2014-08-13-20:34:15 Mysteriously exits (probably something to do with files closing)
+2014-08-13-20:34:53 pipes are *buggered*
+2014-08-13-20:35:07 Doesn't appear to be a terminal (more(1) just cats)
+2014-08-13-20:36:33 Doesn't dispatch scheme expressions at the moment.

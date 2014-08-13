@@ -5068,9 +5068,12 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					sexp qv;
 					int r;
 					// This is the program being piped into
-					argv = simple_command(argv, &qv, excmd, in, out, err, 1);
 				
-					if (excmd) r = c_execute(0,make_background,cmd, in, out, err, NULL);
+					if (excmd) {
+						r = c_execute(0,make_background,cmd, in, out, err, NULL);
+						argv = simple_command(argv, &qv, excmd, in, out, err, 0);
+					}
+
 					STATUS(r);
 
 					if (r) { // non-zero 
