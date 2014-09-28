@@ -1,131 +1,37 @@
 // -*- outline-regexp: "/\\*-+";  -*-
 
-
-#define RECURSIVE_DESCENT
-
-/*- Provenance, licensing, patches and discussion  */
+/*--  Identification and Changes  */
 
 /*
-  
-  igor was written by Randall Gray 
-  Copyright 2013
+  new-external-support.c -- Written by Randall Gray 
+  Initial coding: 
+  Date: 2014.08.18
+  Location: pooh:/local/home/randall/igor/src/new-external-support.c
+
+  Compile with: gcc -ggdb -DDEBUGGING -Wall -o new-external-support new-external-support.c
+  History:
+
+  $Log$
+
 */
 
-/*-- License */
+/*--  Copyright  */
 
 /*
-  This program is licensed under the Free Software Foundation's GPL
-  v.3. Derivative works may be licensed under this license or any
-  subsequent version of the GPL.
-
-  Small snipppets loosely based on functions/macros from interpreter
-  for chibi are scattered through the code, thanks for a great body of
-  code to use as an example, Alex.
-
-  Chibi-scheme is availble from the mercurial repository at 
-  https://code.google.com/p/chibi-scheme/ (as of 2014-03-19).
-
-
-  The process handling is loosely based on code from a small shell
-  (BD-shell) written by Daniel Graziotin <bodom_lx@task3.cc> as part
-  of an operating systems course.  The official page for this is
-  http://daniel.graziotin.net/projects/bd-shell (as of 2014-03-19).
-  The process handling hasn'tt had much work and is currently not
-  functional.
-
-
-
+  (C) 2014 Randall Gray
+  All rights reserved
 */
 
+/*--  Discussion  */
 
+/*- Code */
+/*-- Configuration stuff  */
 
-/*-- Patches */
-
-/* 
-  Patches are preserved in the "patches" directory.  Contributions
-  have been received from:
-
-  Alex Shinn: modifications so the shell compiles under OSX
-
-*/
-
-/*-- Discussion  */
-
-/*
-
-  Igor is written in C and Scheme, and uses the excellent
-  "chibi-scheme" by Alex Shinn.
-
-  Igor is intended to be a day-to-day command shell (like bash or
-  tcsh) for unix-like operating systems. The emphasis is on the
-  interactive usability of the shell.  The basic motivation for
-  writing it is to bring scheme to the command-line.  I want to be
-  able to write things like
-
-  ls -1 (string-append "/home/randall" (backup-dir)) | \
-       (filter executable-file? (read-all stdin))		 \
-       | cpio -c > executables.cpio
-
-  [Yes, I *know* that find(1) can do this already ... it's just an
-  example, ok?]
-
-  Igor supports (or should eventually support):
-     most of the usual sorts of redirection, 
-     command-line editing and history via libreadline and libhistory, 
-	  globbing, 
-	  evaluating s-expressions on the commandline,
-	  using s-expressions as arguments to commands, 
-	  binding scheme functions to things like 
-         globbing
-         variable setting
-			script execution
-         generating prompts
-			tasks which occur before and after programs are run
-     easy hacking.	  
-  
-
-  The name was chosen both because I wanted a shell that I could
-  customise radically and which might even be able to customise
-  itself.  And of course, in homage to the Igors in the Diskworld
-  books by Terry Pratchett, whose Igors are enthusiastic masters of
-  self modification and re-creation.
-
-
-
-
-
-
-
-
-  Discussion:
-  
-  any set of bare s-exps on the command line are dealt with as though we were running a REPL
-  bare scheme variables on a command line will not match a command and will return an error
-
-  X we need to be able to intern programs as functions. (of various return types...)
-  X Need to be able to make aliases -- the converse of making a function out of a program.  We do this already with the builtins to a degree.
-
-  Need to be able to pipe the output of a function to programs or redirect it to a file
-
-  X $(...) is a scheme evaluation that allows wordexp expansions with the caveat that all unescaped/quoted parens are masked out.
-
-  X $(...) is probably better aliased with ,@(...) than with `...` -- that is with scheme evaluations
-  X rather than command evaluations
-
-  At the lowest level, treat the environment variables and scheme variables as distinct -- if someone wants to "unify" the name-space they can.
-
-*/
-
-
-/*-  file tag  */
-
-#ifndef __igor_c
-#define __igor_c
+#ifndef __external_support_c
+#define __external_support_c
 #endif
 
-
-
-/*-  Included files  */
+/*-- Included files  */
 
 #include "chibi/eval.h"
 
@@ -155,13 +61,21 @@
 #include <wordexp.h>
 
 
-/*-   Configuration stuff  */
+#include <stdio.h>
+#include <stdlib.h>                                                                            // just for malloc()
+#include <unistd.h>                                                                           // unix standard lib (fork, dup2 etc.)
+#include <string.h>                                                                            // string functions
+#include <sys/types.h>                                                                     // extra data types
+#include <signal.h>                                                                            // signals
+#include <sys/wait.h>                                                                        // wait functions
+#include <fcntl.h>                                                                               // file descriptor operations
+#include <termios.h>                                                                         // terminal control data structures
 
-/*--   Compiler tweeking  */
+/*---   Compiler tweeking  */
 
 #define _GNU_SOURCE
 
-/*--   Identification defines, and default names  */
+/*---   Identification defines, and default names  */
 
 #define IGOR_VERSION "(igor 0 2 \"Kibble Pie!\")"
 #define IGOR_REPO "https://github.com/Igor-shell/Igor-Scheme-shell"
@@ -191,9 +105,9 @@
 #define IGOR_TRACKING_LIST_VAR "*igor-track-execution-list*"
 #endif
 
-/*- Manifests, macros, and type declarations  */
+/*-- Manifests, macros, and type declarations  */
 
-/*--   scheme environment  stuff  */
+/*---   scheme environment  stuff  */
 
 #define ENV env    // explicitly use the global environment
 
@@ -201,23 +115,13 @@
 #define ENV NULL   // use default
 #endif
 
-/*--   constants  */
+/*---   constants  */
 
 #define BUGGER 233 // This is used as an exit value when a catastrophic, otherwise unhandled error occurs
 
 #define errsize 81 // buffer size for error messages 
 
-/*--- process states */
-
-#define RUNNING 0 // zero in the first bit, not stopped, not backgrounded, not blocked
-#define STOPPED 1 // one in the first bit
-#define BACKGROUNDED 2 // one in the second bit
-#define BLOCKED 4  // blocked on input 
-
-
-
-
-/*--   syntactic sugar and useful macros  */
+/*---   syntactic sugar and useful macros  */
 
 #define Ok 0
 #define is_bad(x) (!x)
@@ -225,11 +129,17 @@
 #define begin if(1)
 
 #if 0
-#define ENTRY(fmt,arg) {fprintf(stderr,"### Entering %s@%s:%d " fmt "\n", __PRETTY_FUNCTION__, __FILE__, __LINE__);}
-#define LEAVING(fmt,arg) {fprintf(stderr,"### Leaving %s@%s:%d " fmt "\n", __PRETTY_FUNCTION__, __FILE__, __LINE__);}
+#define debug(format, ...) fprintf (stderr, format, ## __VA_ARGS__)
 #else
-#define ENTRY(fmt,arg) {}
-#define LEAVING(fmt,arg) {}
+#define debug(format, ...) fprintf (stderr, format, ## __VA_ARGS__)
+#endif
+
+#if 0
+#define ENTRY(fmt, ...) {fprintf(stderr,"### Entering %s@%s:%d " fmt "\n", __PRETTY_FUNCTION__, __FILE__, __LINE__ , ##__VA_ARGS__ );}
+#define DEPARTURE(fmt, ...) {fprintf(stderr,"### Leaving %s@%s:%d " fmt "\n", __PRETTY_FUNCTION__, __FILE__, __LINE__ , ##__VA_ARGS__ );}
+#else
+#define ENTRY(fmt, ...) {}
+#define DEPARTURE(fmt, ...) {}
 #endif
 
 #if 0
@@ -239,9 +149,9 @@
 #endif
 
 #if 0
-#define gronk(rv,excmd) {fprintf(stderr,"                                      [%s@%s:%d]    %d    *rv == SEXP_TRUE = %d\n",__PRETTY_FUNCTION__, __FILE__, __LINE__, excmd, *rv == SEXP_TRUE);}
+#define print_rv(rv,excmd) {fprintf(stderr,"                                      [%s@%s:%d]    %d    *rv == SEXP_TRUE = %d\n",__PRETTY_FUNCTION__, __FILE__, __LINE__, excmd, *rv == SEXP_TRUE);}
 #else
-#define gronk(rv,excmd) {}
+#define print_rv(rv,excmd) {}
 #endif
 
 #if 0
@@ -254,11 +164,8 @@
 #define DAbort(msg) DAbort_i(msg,__FILE__, __LINE__)
 #define report_error(err, errormessage, ctx) report_error_i(err, errormessage, ctx, __FILE__, __LINE__) 
 
-#define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {	\
-				if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
-
-#define UNSET(var,bit) (var = ((var) & ~(bit)))
-#define SET(var,bit) (var = ((var) | (bit)))
+#define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {			\
+			if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
 
 #define statq(fname,query) ({struct stat sb; int rslt; rslt = stat(fname,&sb); (!rslt ? ((sb.st_mode & (query)) ? 0 : -1) : errno);}) // returns 0 on a successful query, -1 if no match, and errno otherwise
 
@@ -269,22 +176,22 @@
 #define isa_program(fname) (isa_file(fname) && (!statq(fname, (S_IXUSR|S_IXGRP|S_IXOTH)))) // returns 1 on true ...
 
 
-/*---   dynamic memory stuff  */
+/*----   dynamic memory stuff  */
 
 #define Free(A) if (A) {int _i; for (_i = 0; _i < STABSIZE && symbol[_i] && (char *)A != symbol[_i]; _i++); if (_i >= STABSIZE) free(A);	A = 0;}
 #if 1
-  #define reallocate(p,s) realloc(p, s)
+#define reallocate(p,s) realloc(p, s)
 #else
-  #define reallocate(p,s) ({void *q = NULL; fprintf(stderr,"REALLOC %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q =  realloc(p, s); fprintf(stderr,"REALLOCATED %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q;})
+#define reallocate(p,s) ({void *q = NULL; fprintf(stderr,"REALLOC %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q =  realloc(p, s); fprintf(stderr,"REALLOCATED %s:%d\n",__FUNCTION__, __LINE__); fflush(stderr); q;})
 #endif
 
-/*---   scheme list construction  */
+/*----   scheme list construction  */
 
 #define ARG1(a) sexp_cons(ctx,a,SEXP_NULL)
 #define ARG2(a,b) sexp_cons(ctx,a,ARG1(b))
 #define ARG3(a,b,c) sexp_cons(ctx,a,ARG2(b,c))
 
-/*---   debugging messages  */
+/*----   debugging messages  */
 
 //#define NDEBUG 1
 
@@ -315,54 +222,61 @@
 #define DPTprintf(format, args ...)
 #endif
 
-/*---   miscellaneous macros  */
+/*----   miscellaneous macros  */
 
 #define eat_white_space(p) {while (p && *p && isspace(*p)) p++;}
 
-/*-- type declarations  */
+
+#define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {			\
+			if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
+
+/*--- type declarations  */
+
+#define EMPTY 0
+#define SCHEME_EXPRESSION 1
+#define FOREGROUND (SCHEME_EXPRESSION << 1)
+#define BACKGROUND (FOREGROUND << 1)
+#define SUSPENDED (BACKGROUND << 1)
+#define BLOCKED_ON_INPUT (SUSPENDED << 1)
+#define EXITED (BLOCKED_ON_INPUT << 1)
+#define TERMINATED ( EXITED<< 1)
+#define ABORTED (TERMINATED << 1)
+
 
 typedef struct PROCESSLIST {
-	pid_t pid;  // pid of process
-	pid_t pgid;
-	int state;
+	struct PROCESSLIST *parent, *prev, *next;
+
+	int jobid;
+	int exitval;
+	pid_t ppid;     // pid of parent process (or zero)
+	pid_t pid;      // pid of process
+	pid_t pgid;     // gid of process
+
+	//unsigned int status;
+	int background;
+	int suspended;
+	int blocked_on_input;
+	int exited;
+	int terminated;
+	int aborted;
+
+	char **command; // null-pointer-terminated array of string makes a string of the command
+	int in, out, err;
+	char *infn, *outfn, *errfn;
 } process_list_t;
 
-
-// The tokeniser and the parse routines use the same structure; lax, I know.
-typedef struct CMD_T {
-	int errcond;
-	char *cmd;
-	int argc;
-	char **argv;  // Each string in the argv actually carries an extra byte past the null terminator which indicates what 
-	// kind of token it is, namely one of the following types: program, s-expression, unquoting-s-expression, splicing-s-expression, 
-	//	function-as-program (builtin), argument, commandline-fragment (like the bit leading up to an s-expression)
-
-//	sexp instringport, outstringport;  // These should be either SEXP_TRUE or SEXP_FALSE and are used for 
-                                      // indicating "pipes" associated with s-expressions
-//	char **instring, **outstring;  // These are strings used for s-expressions
-	int in, out, err;
-	int output_to_sexp;
-	int input_from_sexp;
-
-	char *inputstring;
-	int run_scheme_expression;
-	int shuto, shute;
-	int bg;
-	int NOT; // indicate that the "truth" value returned should be complemented
-	int and_next, or_next;  // it is an error if both and_next and or_next are set
-	struct CMD_T *next;
-} cmd_t;
-
-typedef sexp (*builtin_func)(cmd_t *command, char **argv, int in, int out, char *ins); // the "command" is often NULL
-
-typedef struct BUILTIN {
-	char *name;
-	builtin_func func;
-	struct BUILTIN *left,  *right;
-} Builtin;
+/*
+  Need to rework the way the process list works, need to implement a stack of command bits that are run 
+  (or not run) appropriately.
+*/
 
 
-/*--  function declarations  */
+
+
+
+int njobs = 0; 							// the number of active procs
+
+/*---  function declarations  */
 
 extern sexp argv_to_list(sexp ctx, char **argv, int len);
 
@@ -380,26 +294,36 @@ extern char *evaluate_scheme_expression(int emit, char *sexp, char *instring);
 extern char *exit_val_evaluate_scheme_expression(int emit, char *sexp, char *instring);
 extern char *gets(char *);
 
-extern char *dispatch_scheme_stuff(cmd_t *cmd);
+//extern char *dispatch_scheme_stuff(cmd_t *cmd);
 
-extern char *dispatch_scheme(char **cmd);
+extern char *dispatch_scheme(char **cmd, int input, int output, int error, char *inputstring);
 
 void close_up_shop();
 void run_command_prologue(char *cmds);
 void run_command_epilogue(char *cmds, sexp rv);
+//sexp run_commands(cmd_t *cmd);
+//cmd_t *process_token_list(char **Argv, int in, int out,int err);
+
+int wait_on_job(process_list_t* job);
+int foreground_job(process_list_t* job, int and_continue);
+int background_job(process_list_t* job, int and_continue);
 
 
-/*--  Variables  */
 
-/*---   Scheme environment  */
+/*---  Variables  */
+
+
+/*----   Scheme environment  */
 
 sexp ctx, env, ERRCON = SEXP_FALSE;
 sexp sym;
 sexp igor_execute;
 sexp current_input, current_output, current_error;
+int NOTIFY_BG_PID = 1, NOTIFY_BG_EXIT = 0, NOTIFY_JOB_SIG = 0, NOTIFY_JOB_SUSP = 0, NOTIFY_JOB_STOP = 1;
+
 char *error_message = NULL;
 
-Builtin *builtins = NULL;
+
 
 char **magic_string = NULL;
 int n_magic_strings = 0;
@@ -486,14 +410,20 @@ int IN = 0, OUT = 1, ERR = 2;
 pid_t igor_pid = 0;
 pid_t igor_pgid = 0;
 
+#warning These need to be set and, presumably, maintained.
+int ttyfd = 0;
+pid_t ttypgid = 0;
+
 process_list_t  *proclist  = NULL;
 int proclist_size = 0;
 int n_procs = 0;
 
+static struct termios terminalmodes;
+
 /****  the $$ variables need finishing ****/
  
 
-/*----   array of initialisation sexps  */
+/*-----   array of initialisation sexps  */
 
 char *supporting_initialisation[] = {
 	//"(import (scheme base))",
@@ -568,32 +498,31 @@ char *supporting_initialisation[] = {
 #endif
 	NULL};
 
-
-
-/*- Code  */
-
-/*-- For communication with main(),getting the current ports,... */
+/*-- Functions and procedures  */
+/*--- For communication with main(),getting the current ports,... */
 
 sexp igor_ctx() { return ctx;};
 sexp igor_env() { return env;};
 /*
-sexp sexp_current_input_port(sexp ctx) {
-	return sexp_eval_string(ctx,"(current-input-port)", -1, env);
-}
-sexp sexp_current_output_port(sexp ctx) {
-	return sexp_eval_string(ctx,"(current-output-port)", -1, env);
-}
+  sexp sexp_current_input_port(sexp ctx) {
+  return sexp_eval_string(ctx,"(current-input-port)", -1, env);
+  }
+  sexp sexp_current_output_port(sexp ctx) {
+  return sexp_eval_string(ctx,"(current-output-port)", -1, env);
+  }
 */
 
-/*-- Error handling */
+/*--- Error handling */
 
 void Abort_i(char *msg, char *file, int line) {
+	debug("TESTING %s", "variable arguments in macros");
 	fprintf(stderr,"Fatal error in igor: %s at %s:%d\n", msg, file,  line);
 	fflush(stderr);
 	abort();
 }
 
 void DAbort_i(char *msg, char *file, int line) {
+	debug("TESTING variable arguments in macros too");
 	fprintf(stderr,"Development message: ");
 	Abort_i(msg, file, line);
 }
@@ -649,18 +578,21 @@ sexp check_exception (int emit, sexp ctx, sexp res, char *message, char *subject
 		}
       //exit_failure();
 		sexp_gc_release1(ctx);
-  }
-  return res;
+	}
+	return res;
 }
 
 
 
 
-/*-- memory handling */
+/*--- memory handling */
 
-/*--- arrays and whatnot */
+/*---- arrays of strings and whatnot */
 
-void free_null_terminated_pointer_array(char **ptr) {
+/*----- void delete_string_array(char  **wa){  */
+
+#if 0
+void delete_string_array(char **ptr) {
 	int i = 0;
 
 	for (i = 0; ptr[i]; i++) {
@@ -672,10 +604,19 @@ void free_null_terminated_pointer_array(char **ptr) {
 
 	Free(ptr);
 }
+#else
+void delete_string_array(char  **wa) {
+	int i = 0;
+	for (i = 0; wa && wa[i]; i++) {Free(wa[i]); wa[i] = NULL;} // Just in case there is something pointing into wa
+	if (wa && wa != symbol) free(wa);
+}
+#endif
 
 #if defined(USE_THE_DICKY_ONE)
 #warning Using the dicky one
-char **duplicate_null_terminated_string_array(char **ptr) {
+/*-----  char **duplicate_string_array(char **ptr)   */
+
+char **duplicate_string_array(char **ptr) {
 	char **nptr;
 	int i;
 
@@ -696,7 +637,9 @@ char **duplicate_null_terminated_string_array(char **ptr) {
 	return nptr;
 }
 #else
-char **duplicate_null_terminated_string_array(char **ptr) {
+/*-----  char **duplicate_string_array(char **ptr)   */
+
+char **duplicate_string_array(char **ptr) {
 	char **nptr;
 	int i;
 
@@ -718,6 +661,8 @@ char **duplicate_null_terminated_string_array(char **ptr) {
 #endif
 
 
+/*-----  char **add_to_string_array(char *s, int n, char **array)   */
+
 char **add_to_string_array(char *s, int n, char **array) { 
 // s is the string to be added, n is the number of allocated elements counting the null terminator
 // the string is strdup'd
@@ -725,7 +670,6 @@ char **add_to_string_array(char *s, int n, char **array) {
 	char **a;
 
 #warning The "+4" is a symptom of having got things wrong. This works for the moment, but I need to fix it.
-
 
 	if (array) {
 		int i, k = N>n ? N+4 : n+4;
@@ -748,7 +692,10 @@ char **add_to_string_array(char *s, int n, char **array) {
 }
 
 
-// if n < 0 it indicates that s should be treated as a  null terminated array 
+
+/*-----  void fprintf_string_array(FILE *f, int n, char **s)   */
+// if n < 0 it indicates that s should be treated as a  null terminated array
+
 void fprintf_string_array(FILE *f, int n, char **s) {
 	int i;
 	if (!s) fprintf(f,"<nil>");
@@ -760,58 +707,20 @@ void fprintf_string_array(FILE *f, int n, char **s) {
 	}
 }
 
-/*--- support routines for the command chain */
 
-/*---- Create an empty node */
+/*---- String manipulation  */
 
-cmd_t *new_cmd_t() {
-	cmd_t *p = (cmd_t *)calloc(1, sizeof(cmd_t));
-//	p->instringport = p->outstringport = SEXP_FALSE;
-	p->in = 0;
-	p->out = 1;
-	p->err = 2;
-	return p;
-}
+/*-----  char *is_symbol(char *s)   */
 
-
-/*---- free a node and all the dynamic memory it uses, as well as its children */
-
-void free_cmd(cmd_t *p) {
-	int i = 0;
-
-	if (!p) return;
-
-	if (p->cmd) Free(p->cmd);
-	
-	if (p->argv) {
-		for (i = 0; i < p->argc; i++)	{
-			Free(p->argv[i]);
-			p->argv[i] = NULL;
-		}
-		Free(p->argv);
-		p->argv = NULL;
-	}
-	if (p->in > 2) {close (p->in); p->in = -1;}
-	if (p->out > 2) {close (p->out); p->out = -1;}
-	if (p->err > 2) {close (p->err); p->err = -1;}
-
-	if (p->next) free_cmd(p->next);
-	p->next = NULL;
-
-	Free(p);
-}
-
-
-
-/*-- String manipulation  */
-
-char *is_symbol(char *s) { 
+char *is_symbol(char *s) {
 	int i;
 	for (i = 0; i < STABSIZE && symbol[i]; i++) {
 		if (s == symbol[i]) return symbol[i];
 	}
 	return NULL;
 }
+
+/*-----  char *interned_symbol(char *s)   */
 
 char *interned_symbol(char *s) {
 	int i;
@@ -821,6 +730,7 @@ char *interned_symbol(char *s) {
 	return NULL;
 }
 
+/*-----  char *excise_string(char *s, char *p, int n)   */
 // s is the enclosing string, p is the start of the excision, n is the length of the excision
 char *excise_string(char *s, char *p, int n) {
 	strcpy(p, p+n);
@@ -828,9 +738,11 @@ char *excise_string(char *s, char *p, int n) {
 }
 
 
-/* this will insert the string pointed to by "insertion" into s in front of the character pointed to by p
-	If the total string length (plus the null) is greater than n, it will realloc s
-*/
+/*-----  char *insert_string(int n, char *s, char *p, char *insertion)   */
+   /* this will insert the string pointed to by "insertion" into s in front of the character pointed to by p
+	   If the total string length (plus the null) is greater than n, it will realloc s
+   */
+
 char *insert_string(int n, char *s, char *p, char *insertion) {
 	char *tmp;
 
@@ -846,7 +758,9 @@ char *insert_string(int n, char *s, char *p, char *insertion) {
 	return s;
 }
 
+/*-----  char *string_array_as_string(int argc, char **argv)   */
 // This will, of course, need freeing....
+
 char *string_array_as_string(int argc, char **argv) {
 	int i, n;
 	char *s = NULL;
@@ -869,75 +783,244 @@ char *string_array_as_string(int argc, char **argv) {
 }
 
 
+/*--- Job management */
 
+/*---- inserts a process into the list */
+process_list_t* insert_job(process_list_t* job_list, pid_t ppid, pid_t pid, pid_t pgid, char **command, int status) {
+	usleep(10000);
+	process_list_t *job = (process_list_t *)calloc(1, sizeof(process_list_t));
 
-/*-- File handling */
-
-void delete_file_stat(struct stat *fs) {
-	if (fs) free(fs);
-}
-
-
-
-struct stat *file_stat(char *filename) {
-	int n;
-	struct stat *fs = (struct stat *)calloc(1, sizeof(struct stat));
-	if (!fs) return NULL;
-
-	n = stat(filename, fs);
-	if  (n) free(fs);
-	return (n ? NULL : fs);
-}
-
-// The following would really be better done with scheme routines, but
-// I cannot get rid of the memory leak associated with them.
-
-
-unsigned long get_stat_dev(char *filename) { /* device which holds the file */
-	struct stat *fs = NULL;
-	unsigned long n = 0;
-	fs = file_stat(filename);
-	if (fs)  {
-		n = fs->st_dev;
-		free(fs);
+	if (!job) {
+		fprintf(stderr,"Unable to insert new process, out of memory!\n");
+		abort();
 	}
-	else n = 0;
-	return n;
-}
+	
+	job->jobid = 0;
+	job->ppid = ppid;
+	job->pid = pid;
+	job->pgid = pgid;
 
+	if (status & BACKGROUND) job->background = BACKGROUND;
+	if (status & SUSPENDED) job->suspended = SUSPENDED;
+	if (status & BLOCKED_ON_INPUT) job->blocked_on_input = BLOCKED_ON_INPUT;
+	if (status & EXITED) job->exited = EXITED;
+	if (status & TERMINATED) job->terminated = TERMINATED;
+	if (status & ABORTED) job->aborted = ABORTED;
 
-unsigned long get_stat_ino(char *filename) { /* inode number */
-	struct stat *fs = NULL;
-	unsigned long n = 0;
-	fs = file_stat(filename);
-	if (fs) {
-		n = fs->st_dev;
-		free(fs);
+	job->command = duplicate_string_array(command);
+	job->next = NULL;
+
+	if (job_list == NULL) {
+		job_list = job;
+	} else {
+		process_list_t *p;
+		int n = 0;
+		for (p = job_list; p; p = p->next) if (n < p->jobid) n = p->jobid;
+		job->next = job_list;
+		job_list = job;
 	}
-	return n;
+	job->jobid++;
+	return job_list;
 }
 
-unsigned short get_stat_mode(char *filename) { /* protection */
-	struct stat *fs = NULL;
-	unsigned short n = 0;
-	fs = file_stat(filename);
-	if (fs) {
-		n = fs->st_mode;
-		free(fs);
+/*---- set status of process */
+int set_job_status(process_list_t *job_list, int pid, int status) {
+	usleep(10000);
+	process_list_t *p = job_list;
+	for (; p && p->pid != pid; p = p->next);
+	if (p) {
+		if (status & BACKGROUND) p->background = BACKGROUND;
+		if (status & SUSPENDED) p->suspended = SUSPENDED;
+		if (status & BLOCKED_ON_INPUT) p->blocked_on_input = BLOCKED_ON_INPUT;
+		if (status & EXITED) p->exited = EXITED;
+		if (status & TERMINATED) p->terminated = TERMINATED;
+		if (status & ABORTED) p->aborted = ABORTED;
+
+		return 1;
 	}
-	return n;
+	return 0;
 }
 
-unsigned long get_stat_nlink(char *filename) { /* number of hard links */
-	struct stat *fs = NULL;
-	unsigned long n = 0;
-	fs = file_stat(filename);
-	if (fs) {
-		n = fs->st_nlink;
-		free(fs);
+
+
+/*---- process_list_t* delete_jobid(process_list_t* job_list, int jobid) */
+
+process_list_t* delete_jobid(process_list_t* job_list, int jobid) {
+	usleep(10000);
+	if (job_list == NULL) return NULL;
+
+	process_list_t *p = NULL, *prev = NULL;
+
+	if (job_list && job_list->jobid == jobid) {
+		p = job_list;
+		job_list = p->next;
+		delete_string_array(p->command);
+		free(p);
 	}
-	return n;
+	else {
+		for (p = job_list; p && jobid != p->jobid; p = p->next) {
+			prev = p;
+		}
+		if (p) {
+			if (!prev) job_list = p->next;
+			else prev->next = p->next;
+			
+			delete_string_array(p->command);
+			free(p);
+		}
+	}
+	return job_list;
 }
+
+
+/*---- process_list_t* delete_jobptr(process_list_t* job_list, process_list_t *job) */
+
+process_list_t* delete_jobptr(process_list_t* job_list, process_list_t *job) {
+	usleep(10000);
+	if (job_list == NULL) return NULL;
+
+	process_list_t *p = NULL, *prev = NULL;
+
+	if (job && job == job_list) {
+		job_list = job->next;
+		delete_string_array(job->command);
+		free(job);
+	}
+	else {
+		for (p = job_list; p && p != job; p = p->next) {
+			prev = p;
+		}
+		if (p) {
+			if (!prev) job_list = p->next;
+			else prev->next = p->next;
+
+			delete_string_array(p->command);
+			free(p);
+		}
+	}
+	
+	return job_list;
+}
+
+/*---- process_list_t* get_jobid(process_list_t *job_list, int jid) */
+process_list_t* get_jobid(process_list_t *job_list, int jid) {
+	usleep(10000);
+	process_list_t *p;
+	for (p = job_list; p; p = p->next) {
+		if (p->jobid == jid) return p;
+	}
+	return NULL;
+}
+
+/*---- process_list_t* get_procid(process_list_t *job_list, int value) */
+process_list_t* get_procid(process_list_t *job_list, int pid) {
+	usleep(10000);
+	process_list_t *p;
+	for (p = job_list; p; p = p->next) {
+		if (p->pid == pid) return p;
+	}
+	return NULL;
+}
+
+/*---- process_list_t* get_jobptr(process_list_t *job_list, process_list_t *j) */
+process_list_t* get_jobptr(process_list_t *job_list, process_list_t *j) {
+	usleep(10000);
+	process_list_t *p;
+	for (p = job_list; p; p = p->next) {
+		if (p == j) return p;
+	}
+	return NULL;
+}
+
+/*---- process_list_t *purge_status(process_list_t *job_list, int status)  INCOMPLETE  */
+
+process_list_t *purge_status(process_list_t *job_list, int status) /* INCOMPLETE*/  {
+#warning INCOMPLETE
+	return NULL;
+}
+
+
+/*--- File handling */
+
+/*---- stat routines (also used by chibi code) */
+
+/*----- void delete_file_stat(struct stat *fs)   */
+
+void delete_file_stat(struct stat *fs) { 
+	if (fs) free(fs); 
+} 
+
+/*----- struct stat *file_stat(char *filename)   */
+
+struct stat *file_stat(char *filename) { 
+	int n; 
+	struct stat *fs = (struct stat *)calloc(1, sizeof(struct stat)); 
+	if (!fs) return NULL; 
+
+	n = stat(filename, fs); 
+	if  (n) free(fs); 
+	return (n ? NULL : fs); 
+} 
+
+// The following would really be better done with scheme routines, but 
+// I cannot get rid of the memory leak associated with them. 
+
+
+/*----- unsigned long get_stat_dev(char *filename)   */
+
+unsigned long get_stat_dev(char *filename) { /* device which holds the file */ 
+	struct stat *fs = NULL; 
+	unsigned long n = 0; 
+	fs = file_stat(filename); 
+	if (fs)  { 
+		n = fs->st_dev; 
+		free(fs); 
+	} 
+	else n = 0; 
+	return n; 
+} 
+
+
+/*----- unsigned long get_stat_ino(char *filename)   */
+
+unsigned long get_stat_ino(char *filename) { /* inode number */ 
+	struct stat *fs = NULL; 
+	unsigned long n = 0; 
+	fs = file_stat(filename); 
+	if (fs) { 
+		n = fs->st_dev; 
+		free(fs); 
+	} 
+	return n; 
+} 
+
+/*----- unsigned short get_stat_mode(char *filename) { // protection */
+
+unsigned short get_stat_mode(char *filename) { /* protection */ 
+	struct stat *fs = NULL; 
+	unsigned short n = 0; 
+	fs = file_stat(filename); 
+	if (fs) { 
+		n = fs->st_mode; 
+		free(fs); 
+	} 
+	return n; 
+} 
+
+/*----- unsigned long get_stat_nlink(char *filename) { // number of hard links */
+
+unsigned long get_stat_nlink(char *filename) { /* number of hard links */ 
+	struct stat *fs = NULL; 
+	unsigned long n = 0; 
+	fs = file_stat(filename); 
+	if (fs) { 
+		n = fs->st_nlink; 
+		free(fs); 
+	} 
+	return n; 
+} 
+
+/*----- unsigned short get_stat_uid(char *filename) { // user ID of owner */
 
 unsigned short get_stat_uid(char *filename) { /* user ID of owner */
 	struct stat *fs = NULL;
@@ -950,6 +1033,8 @@ unsigned short get_stat_uid(char *filename) { /* user ID of owner */
 	return n;
 }
 
+/*----- unsigned short get_stat_gid(char *filename) { // group ID of owner */
+
 unsigned short get_stat_gid(char *filename) { /* group ID of owner */
 	struct stat *fs = NULL;
 	unsigned short n = 0;
@@ -960,6 +1045,8 @@ unsigned short get_stat_gid(char *filename) { /* group ID of owner */
 	}
 	return n;
 }
+
+/*----- unsigned long get_stat_rdev(char *filename) { // device ID (if special file) */
 
 unsigned long get_stat_rdev(char *filename) { /* device ID (if special file) */
 	struct stat *fs = NULL;
@@ -972,6 +1059,8 @@ unsigned long get_stat_rdev(char *filename) { /* device ID (if special file) */
 	return n;
 }
 
+/*----- unsigned long get_stat_size(char *filename) { // total size, in bytes */
+
 unsigned long get_stat_size(char *filename) { /* total size, in bytes */
 	struct stat *fs = NULL;
 	unsigned long n = 0;
@@ -982,6 +1071,8 @@ unsigned long get_stat_size(char *filename) { /* total size, in bytes */
 	}
 	return n;
 }
+
+/*----- unsigned long get_stat_blksize(char *filename) { // blocksize for file system I/O */
 
 unsigned long get_stat_blksize(char *filename) { /* blocksize for file system I/O */
 	struct stat *fs = NULL;
@@ -994,6 +1085,8 @@ unsigned long get_stat_blksize(char *filename) { /* blocksize for file system I/
 	return n;
 }
 
+/*----- unsigned long get_stat_blocks(char *filename) { // number of 512B blocks allocated */
+
 unsigned long get_stat_blocks(char *filename) { /* number of 512B blocks allocated */
 	struct stat *fs = NULL;
 	unsigned long n = 0;
@@ -1004,6 +1097,8 @@ unsigned long get_stat_blocks(char *filename) { /* number of 512B blocks allocat
 	}
 	return n;
 }
+
+/*----- unsigned long get_stat_atime(char *filename) { // time of last access */
 
 unsigned long get_stat_atime(char *filename) { /* time of last access */
 	struct stat *fs = NULL;
@@ -1016,6 +1111,8 @@ unsigned long get_stat_atime(char *filename) { /* time of last access */
 	return n;
 }
 
+/*----- unsigned long get_stat_mtime(char *filename) { // time of last modification */
+
 unsigned long get_stat_mtime(char *filename) { /* time of last modification */
 	struct stat *fs = NULL;
 	unsigned long n = 0;
@@ -1026,6 +1123,8 @@ unsigned long get_stat_mtime(char *filename) { /* time of last modification */
 	}
 	return n;
 }
+
+/*----- unsigned long get_stat_ctime(char *filename) { // time of last status change */
 
 unsigned long get_stat_ctime(char *filename) { /* time of last status change */
 	struct stat *fs = NULL;
@@ -1038,6 +1137,8 @@ unsigned long get_stat_ctime(char *filename) { /* time of last status change */
 	return n;
 }
 
+/*---- int Close(int fd) {  */
+
 int Close(int fd) {
 	if (fd >= 0) fd = close(fd);
 	else {
@@ -1048,6 +1149,8 @@ int Close(int fd) {
 	}
 	return 0;
 }
+
+/*---- char *read_all(int fd) {  */
 
 char *read_all(int fd) {
 	char *inputstring = NULL;
@@ -1092,44 +1195,9 @@ char *read_all(int fd) {
 }
 
 
-/*-- support routines for builtin commands  */
+/*--- support routines associated command line syntax */
 
-  void delete_builtin(Builtin *node) {
-	if (node) {
-		delete_builtin(node->left);
-		delete_builtin(node->right);
-		Free(node->name);
-		Free(node);
-	}
-}
-	
-
-Builtin *insert_builtin(Builtin *tree, char *name, builtin_func func) {
-	if (!tree) {
-		tree = (Builtin *)malloc(sizeof(Builtin));
-		tree->name = strdup(name);
-		tree->func = func;
-		tree->left = tree->right = NULL;
-	}
-	else if (strcmp(name, tree->name) < 0) tree->left = insert_builtin(tree->left, name, func);
-	else if (strcmp(name, tree->name) > 0) tree->right = insert_builtin(tree->right, name, func);
-	else if (strcmp(name, tree->name) == 0) tree->func = func;
-	
-	return tree;
-}
-
-Builtin *member(char *name, Builtin *tree) {
-	if (!tree) return NULL;
-	else if (strcmp(name, tree->name) < 0) return member(name, tree->left);
-	else if (strcmp(name, tree->name) > 0) return member(name, tree->right);
-	else if (strcmp(name, tree->name) == 0) return tree;
-	return NULL;
-}
-
-
-/*-- support routines associated command line syntax */
-
-/*--- This adds a string into the list of systax elements (like redirection symbols) */
+/*---- void add_magic(char *str) --  adds a string into the list of syntax elements (like redirection symbols) */
 
 void add_magic(char *str) {
 	int i = 0;
@@ -1153,6 +1221,8 @@ void add_magic(char *str) {
 	}
 }
 
+/*---- void remove_magic() {  */
+
 void remove_magic() {
 	int i;
 	for (i = 0; i < n_magic_strings; i++) {
@@ -1163,6 +1233,8 @@ void remove_magic() {
 }
 
 
+/*---- char *is_magic(char *s) {  */
+
 char *is_magic(char *s) {
 	int i = 0;
 
@@ -1172,11 +1244,11 @@ char *is_magic(char *s) {
 }
 
 
-/*-- support routines for parsing */
+/*--- support routines for parsing */
 
+/*---- char *word_expand_string(char *s) {  */
 
-// this returns the expansion *as one string*
-char *word_expand_string(char *s) {
+char *word_expand_string(char *s) {// this returns the expansion *as one string*
 	wordexp_t arg;
 	int i, n, k;
 	int err = 0;
@@ -1191,7 +1263,7 @@ char *word_expand_string(char *s) {
 	if (err) return s; 
 
 	free(s);
-
+	
 	for (i = 0, n = 0; i < arg.we_wordc; i++) {
 		n += strlen(arg.we_wordv[i]);
 	}
@@ -1207,6 +1279,8 @@ char *word_expand_string(char *s) {
 }
 
 
+/*---- char protect_char(int maskit, char c) {  */
+
 char protect_char(int maskit, char c) {
 	char *domain = "()";
 	char codomain[] = {'('| 0x80, ')' | 0x80, 0};
@@ -1219,10 +1293,14 @@ char protect_char(int maskit, char c) {
 	else return to[s-from];
 }
 
+/*---- char *first_non_space_char(char *s) {  */
+
 char *first_non_space_char(char *s) {
 	while (s && *s && isspace(*s)) s++;
 	return s;
 }
+
+/*---- char *jump_fence_c(char *cp, char *collecting, char lookingfor, char escape, int eat_quotes) {  */
 
 char *jump_fence_c(char *cp, char *collecting, char lookingfor, char escape, int eat_quotes) {
 	if (!eat_quotes) *collecting++ = *cp;
@@ -1243,6 +1321,8 @@ char *jump_fence_c(char *cp, char *collecting, char lookingfor, char escape, int
 }
 
 
+/*---- char *jump_fence(char *cp, char lookingfor, char escape) {  */
+
 char *jump_fence(char *cp, char lookingfor, char escape) {
 	cp++; // Skip the initial quote; if it weren't there, we wouldn't be here.
 	for (; cp && *cp && *cp != lookingfor; cp++) {
@@ -1256,6 +1336,8 @@ char *jump_fence(char *cp, char lookingfor, char escape) {
 
 /* NOTE: The function below returns a pointer to just past the
 	s-expression; if there is a parsing problem, it returns s */
+
+/*---- char *paren_protection(char *s, char escape, int mask) {   */
 
 char *paren_protection(char *s, char escape, int mask) { 
 	char expecting = 0; // we expect either whitespace or the end of the string
@@ -1318,6 +1400,8 @@ char *paren_protection(char *s, char escape, int mask) {
 	else return s;
 }	
 
+/*---- char *sexpr_depth(char *buffer, char *str) {  */
+
 char *sexpr_depth(char *buffer, char *str) {
 	// This returns a dynamically allocated string of the unclosed
 	// bits, namely members of {'(', '[', '{' and '"'}.  The string should be 
@@ -1368,6 +1452,8 @@ char *sexpr_depth(char *buffer, char *str) {
 }
 
 
+/*---- int starts_sexp(char *s) {  */
+
 int starts_sexp(char *s) {
 	char *p = s;
 	for (; p && *p && isspace(*p); p++);
@@ -1377,9 +1463,13 @@ int starts_sexp(char *s) {
 	return 0;
 }
 
+/*---- int is_unfinished_sexp(char *s) {  */
+
 int is_unfinished_sexp(char *s) {
 	return s && starts_sexp(s) && !is_sexp(s);
 }
+
+/*---- int is_sexp(char *s) {  */
 
 int is_sexp(char *s) {
 	char *parens = NULL;
@@ -1399,6 +1489,8 @@ int is_sexp(char *s) {
 /* NOTE: The function below returns a pointer to just past the
 	s-expression; if there is a parsing problem, it returns s */
 
+
+/*---- char *jump_sexp(char *s, char escape) {  */
 
 char *jump_sexp(char *s, char escape) {
 	char expecting = 0; // we expect either whitespace or the end of the string
@@ -1441,17 +1533,14 @@ char *jump_sexp(char *s, char escape) {
 }	
 
 
+/*--- support routines for command execution */
 
-
-
-/*--- Support routines for command execution */
-
-/*---- Used to rewrite "define" and "define-syntax" type statements so they are eval'd */
+/*---- char *guard_definitions(char *s) --Used to rewrite "define" and "define-syntax" type statements so they are eval'd */
 
 char *guard_definitions(char *s) {
 	char *p = NULL, *r = NULL;
 	if (!s) return s;
-
+	
 	for (p = s; *p && isspace(*p); p++);
 
 	// *** This ought to catch "define" and "define-syntax", ... 
@@ -1464,9 +1553,11 @@ char *guard_definitions(char *s) {
 
 
 
-/*-- Routines which call on chibi directly  */
+/*--- Routines which call on chibi directly  */
 
-/*--- Utility functions */ 
+/*---- Utility functions */ 
+
+/*---- sexp sexp_get_procedure(sexp ctx, sexp env, char *procname) {  */
 
 sexp sexp_get_procedure(sexp ctx, sexp env, char *procname) {
 	sexp_gc_var2(proc,tmp);
@@ -1479,6 +1570,8 @@ sexp sexp_get_procedure(sexp ctx, sexp env, char *procname) {
 	sexp_gc_release2(ctx);
 	return sym;
 }
+
+/*---- int sexp_get_fixnum_value(sexp ctx, sexp env, char *name) {  */
 
 int sexp_get_fixnum_value(sexp ctx, sexp env, char *name) {
 	int result = 0;
@@ -1494,6 +1587,8 @@ int sexp_get_fixnum_value(sexp ctx, sexp env, char *name) {
 
 	return result;
 }
+
+/*---- long int sexp_get_long_fixnum_value(sexp ctx, sexp env, char *name) {  */
 
 long int sexp_get_long_fixnum_value(sexp ctx, sexp env, char *name) {
 	long  int result = 0;
@@ -1511,6 +1606,8 @@ long int sexp_get_long_fixnum_value(sexp ctx, sexp env, char *name) {
 }
 
 
+/*---- char *get_input_string(sexp ctx, sexp instr) {  */
+
 char *get_input_string(sexp ctx, sexp instr) {
 	char *s = NULL;
 	sexp_gc_var3(gos,int1,sstr);
@@ -1524,6 +1621,8 @@ char *get_input_string(sexp ctx, sexp instr) {
 	sexp_gc_release3(ctx);
 	return s;
 }
+
+/*---- sexp make_input_string(sexp ctx, char *str) {  */
 
 sexp make_input_string(sexp ctx, char *str) {
 	sexp isp = SEXP_FALSE;
@@ -1540,6 +1639,8 @@ sexp make_input_string(sexp ctx, char *str) {
 
 /*---- exotic wordexp support */
  
+/*----- sexp sexp_wordexp_sexp(sexp ctx, sexp sstr) {  */
+
 sexp sexp_wordexp_sexp(sexp ctx, sexp sstr) {
 	int i = 0;
 	char *s = NULL;
@@ -1570,6 +1671,8 @@ sexp sexp_wordexp_sexp(sexp ctx, sexp sstr) {
 	return result;
 }
 
+/*----- sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {  */
+
 sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 	int i = 0;
 	char *s  = NULL;
@@ -1592,7 +1695,7 @@ sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 		return SEXP_FALSE;
 	}
 
-
+	
 	if (!sexp_stringp(sstr)) {
 		report_error(0, "word-exp takes a string argument", __FUNCTION__);
 		sexp_gc_release3(ctx);
@@ -1617,6 +1720,8 @@ sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 }
 
 
+/*----- char **wordexp_string_array(char *str) {  */
+
 char **wordexp_string_array(char *str) {
 	wordexp_t w;
 	char **arry = NULL;
@@ -1637,14 +1742,10 @@ char **wordexp_string_array(char *str) {
 	}
 }
 
-void delete_string_array(char  **wa) {
-	int i = 0;
-	for (i = 0; wa && wa[i]; i++) {Free(wa[i]); wa[i] = NULL;} // Just in case there is something pointing into wa
-	if (wa && wa != symbol) free(wa);
-}
-
 
 /*--- File handling */
+
+/*---- sexp open_input_fd(int fd) {  */
 
 sexp open_input_fd(int fd) {
 	sexp inp = SEXP_FALSE, int1 = SEXP_FALSE, int2 = SEXP_FALSE;
@@ -1663,6 +1764,8 @@ sexp open_input_fd(int fd) {
 
 	return inp;
 }
+
+/*---- sexp open_output_fd(int fd) {  */
 
 sexp open_output_fd(int fd) {
 	sexp outp = SEXP_FALSE, int1 = SEXP_FALSE, int2 = SEXP_FALSE;
@@ -1683,7 +1786,9 @@ sexp open_output_fd(int fd) {
 }
 
 
-/*--- List construction */
+/*----- List construction */
+
+/*------ sexp sexp_list3(sexp ctx, sexp a, sexp b, sexp c) {  */
 
 sexp sexp_list3(sexp ctx, sexp a, sexp b, sexp c) {
 	sexp_gc_var1(res);
@@ -1696,6 +1801,8 @@ sexp sexp_list3(sexp ctx, sexp a, sexp b, sexp c) {
 }
 
 
+/*------ sexp sexp_list4(sexp ctx, sexp a, sexp b, sexp c, sexp d) {  */
+
 sexp sexp_list4(sexp ctx, sexp a, sexp b, sexp c, sexp d) {
 	sexp_gc_var1(res);
 	sexp_gc_preserve1(ctx,res);
@@ -1706,6 +1813,8 @@ sexp sexp_list4(sexp ctx, sexp a, sexp b, sexp c, sexp d) {
 	sexp_gc_release1(ctx);
 	return res;
 }
+
+/*------ sexp argv_to_list(sexp ctx, char **argv, int n) {  */
 
 sexp argv_to_list(sexp ctx, char **argv, int n) {
 	// if n < 0 it assumes that the array is null terminated, else it must have n args
@@ -1739,10 +1848,10 @@ sexp argv_to_list(sexp ctx, char **argv, int n) {
 
 
 
-/*--- Path/element globbing and expansion of environment variables */
+/*----- Path/element globbing and expansion of environment variables */
 
 
-/*---- returns a list of expansions for sstr  */
+/*------ returns a list of expansions for sstr  */
 
 sexp sexp_wordexp(char *sstr) {
 	int i = 0;
@@ -1775,9 +1884,9 @@ sexp sexp_wordexp(char *sstr) {
 	return result;
 }
 	
-/*---- calls the scheme routine expand-path to complete the path element in s */
+/*------ calls the scheme routine expand-path to complete the path element in s */
 
-  char *completed_path(char *s) { // Don't free s, the calling routine needs to deal with it
+char *completed_path(char *s) { // Don't free s, the calling routine needs to deal with it
 	sexp_gc_var3(expanded,p,r);
 	char *sexpr = NULL, *t = NULL;
 	sexp_gc_preserve3(ctx,expanded,p,r);
@@ -1792,7 +1901,7 @@ sexp sexp_wordexp(char *sstr) {
 		else {
 			t = s;
 		}
-
+		
 		//expanded = sexp_eval(ctx, sexp_list2(ctx,sexp_eval_string(ctx,"expand-path",-1,ENV),sexp_c_string(ctx,t,-1)), ENV);
 
 		r = SEXP_NULL;
@@ -1823,9 +1932,9 @@ sexp sexp_wordexp(char *sstr) {
 	return NULL;
 }
 
-/*---- Builtins and their close kin  */
+/*--- Builtins and their close kin  */
 
-/*----- Set an environment variable */
+/*---- Set an environment variable */
 
 void igor_set(sexp ctx, char *variable, char *value) {
 	char *p = NULL;
@@ -1838,7 +1947,7 @@ void igor_set(sexp ctx, char *variable, char *value) {
 	free(p);
 }
 
-/*----- set the prompt for reading a continued line */
+/*---- set the prompt for reading a continued line */
 
 void set_prompt_continuation(char *buffer) {
 	igor_set(ctx, "*igor-prompt-for-line-continuation-string*", buffer);
@@ -1849,7 +1958,7 @@ void free_prompt_continuation() {
 	igor_set(ctx, "*igor-prompt-for-line-continuation-string*", "");
 }
 
-/*----- updates the name of the file used by libhistory */
+/*---- updates the name of the file used by libhistory */
 
 /* NB: it would be easy to save commands history in their cwd  */
 
@@ -1893,9 +2002,9 @@ void refresh_history_filename() {
 	
 }
 
-/*-- command line input routines */
+/*--- Command line input routines */
 
-/*--- intermediate level routine for getting the next command line (wraps readline/fgets), resolves prompt, history... */
+/*---- intermediate level routine for getting the next command line (wraps readline/fgets), resolves prompt, history... */
 
 char *read_line(FILE *f, char *prompt_function) {
 	char *cmd = NULL;
@@ -1980,7 +2089,7 @@ char *read_line(FILE *f, char *prompt_function) {
 	return cmd;
 }
 
-/*--- high level routine to get next command. handles continuations, selects prompts, handles ^d, & eof */
+/*---- high level routine to get next command. handles continuations, selects prompts, handles ^d, & eof */
 
 // Note that s-expressions which span lines are treated quite differently to "normal" commandlines.
 
@@ -2010,7 +2119,7 @@ char *get_commandline(FILE *f, char *buffer) {
 		sdepth = sexpr_depth(sdepth, buffer);
 		depth = strlen(sdepth);
 	}
-
+	
 	for (;;) {
 		int current_line_len = 0;
 
@@ -2178,28 +2287,232 @@ char *get_commandline(FILE *f, char *buffer) {
 }
 
 
-/*-- Command execution calls  */
 
-/*--- straight execution of  a command array  */
+/*---- signal handlers */
+
+/**
+ * signal handler for SIGCHLD
+ */
+void signalHandler_child(int p)
+{
+	pid_t pid;
+	int status;
+	
+	pid = waitpid(WAIT_ANY, &status, WUNTRACED | WNOHANG); // intercept the process that sends the signal
+	if (pid > 0) {                                                                          // if there are information about it
+		process_list_t* job = get_procid(proclist, pid);
+		if (!job) return;
+
+		if (WIFEXITED(status)) {                                                    // case the process exits normally
+			if (job->background) {                             // child in background terminates normally
+				if (NOTIFY_BG_EXIT) printf("\n[%d]+  Done\n", job->jobid); // inform the user
+				proclist = delete_jobptr(proclist,job);                                                    // delete it from the list
+			}
+		} 
+		else if (WIFSIGNALED(status)) {                                  // the job dies because of a signal
+			if (NOTIFY_JOB_SIG) printf("\n[%d]+  KILLED\n", job->jobid); // inform the user
+			proclist = delete_jobptr(proclist, job);                                                     // delete the job from the list
+		} 
+		else if (WIFSTOPPED(status)) {                                  // a job receives a SIGSTP signal
+			if (job->background) {                           // the job is in bg
+				tcsetpgrp(ttyfd, ttypgid);
+				set_job_status(proclist, pid, BLOCKED_ON_INPUT);                     // change its status to "waiting for input"
+				if (NOTIFY_JOB_SUSP) printf("\n[%d]+   suspended [wants input]\n",
+					job->jobid);                                  // inform the user
+			} 
+			else {                                                                           // otherwise, the job is going to be suspended
+				tcsetpgrp(ttyfd, job->pgid);
+				set_job_status(proclist, pid, SUSPENDED);                         // we modify the status
+				if (NOTIFY_JOB_STOP) printf("\n[%d]+   stopped\n", job->jobid); // and inform the user
+			}
+			return;
+		} 
+		else {
+			if (job->background) {                          // otherwise, delete the job from the list
+				proclist = delete_jobptr(proclist,job);                                                    // delete it from the list
+			}
+		}
+		tcsetpgrp(ttyfd, ttypgid);
+	}
+}
+
+void register_death(process_list_t *job, int signalled, int exitval) {
+	job->exitval = exitval;
+	if (signalled > 0) job->terminated =  TERMINATED;
+	else if (!signalled) job->exited =  EXITED;
+	else job->aborted = ABORTED;
+}
+
+void catch_sigchld(int signum) {
+	int child_status = 0;
+	
+	waitpid(0, &child_status, WNOHANG);
+	// This basically just keeps the innards clear
+	return;
+}
+
+void catch_sigint(int signum) {
+	//int child_status = 0;
+	
+	//waitpid(0, &child_status, WNOHANG);
+	//// This basically just keeps the innards clear
+	return;
+}
+
+
+void catch_sigterm(int signum) {
+	//int child_status = 0;
+	
+	//waitpid(0, &child_status, WNOHANG);
+	//// This basically just keeps the innards clear
+	return;
+}
+
+
+void catch_sigquit(int signum) {
+	//int child_status = 0;
+	
+	//waitpid(0, &child_status, WNOHANG);
+	//// This basically just keeps the innards clear
+	return;
+}
+
+void signalhandler(int p) {
+	int exitval = -1;
+	pid_t pid = -1;
+	process_list_t *job;
+
+	pid = waitpid(WAIT_ANY, &exitval, WUNTRACED | WNOHANG); // intercept the process that sends the signal
+
+	if (pid > 0) {                                                                          // if there are information about it
+		job = get_procid(proclist, pid);                      // get the job from the list
+		if (!job)	return;
+
+		if (WIFSTOPPED(exitval)) { // SIGSTOP
+			if (!(job->background)) { // we are suspending things
+				tcsetpgrp(0, job->pgid);
+				job->suspended = SUSPENDED;;
+			} 
+			else { // mark it as blocked
+				tcsetpgrp(0, igor_pgid);
+				job->suspended=  SUSPENDED;
+			}
+			return;
+		}
+		else if (WIFCONTINUED(exitval)) { // SIGCONT
+			if (job->background) {
+				job->suspended = 0;
+			}
+			proclist = delete_jobptr(proclist, job);
+		} 
+		else if (WIFSIGNALED(exitval)) { // killed
+			register_death(job,1,exitval);
+			proclist = delete_jobptr(proclist, job);
+		} 
+		else if (WIFEXITED(exitval)) { // Normal exit
+#if 1
+			if (job->background) register_death(job,0, exitval);
+			else register_death(job,0,exitval);
+#else
+			register_death(job,0,exitval);
+			proclist = delete_jobptr(proclist, job);
+#endif
+		} 
+		else { // Something must have happened, just remove it from the array; we won't be able to do anything with it.
+			if (job->background) register_death(job,-1,exitval); /*  */
+			proclist = delete_jobptr(proclist, job);
+		}
+		tcsetpgrp(0, igor_pgid);
+	}
+}
+
+
+/*--- Command execution calls  */
+
+
+int check_job_control_builtins()
+{
+/*
+  if (strcmp("in", commandArgv[0]) == 0) {
+  launchJob(commandArgv + 2, *(commandArgv + 1), STDIN, FOREGROUND);
+  return 1;
+  }
+  if (strcmp("out", commandArgv[0]) == 0) {
+  launchJob(commandArgv + 2, *(commandArgv + 1), STDOUT, FOREGROUND);
+  return 1;
+  }
+*/
+#warning This is totally wrong
+#if 0
+	char **commandArgv = 0;
+
+	if (strcmp("bg", commandArgv[0]) == 0) {
+		if (commandArgv[1] == NULL)
+			return 0;
+		if (strcmp("in", commandArgv[1]) == 0)
+			launchJob(commandArgv + 3, *(commandArgv + 2), STDIN, BACKGROUND);
+		else if (strcmp("out", commandArgv[1]) == 0)
+			launchJob(commandArgv + 3, *(commandArgv + 2), STDOUT, BACKGROUND);
+		else
+			launchJob(commandArgv + 1, "STANDARD", 0, BACKGROUND);
+		return 1;
+	}
+	if (strcmp("fg", commandArgv[0]) == 0) {
+	if (commandArgv[1] == NULL)
+		return 0;
+	int jid = (int) atoi(commandArgv[1]);
+	process_list_t* job = get_jobid(job_list, jid);
+	if (job == NULL)
+		return 0;
+	if (job->status & (BLOCKED_ON_INPUT|SUSPENDED))
+		putJobForeground(job, TRUE);
+	else                                                                                                // status = BACKGROUND
+		putJobForeground(job, FALSE);
+	return 1;
+	}
+	if (strcmp("jobs", commandArgv[0]) == 0) {
+		printJobs();
+		return 1;
+	}
+	if (strcmp("kill", commandArgv[0]) == 0) {
+		if (commandArgv[1] == NULL)
+			return 0;
+		kill_job(atoi(commandArgv[1]));
+		return 1;
+	}
+#endif
+	return 0;
+}
+
+
+
+/*----- straight execution of  a command array  */
 
 sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	char *cmds = NULL;
 	char **tokenise_cmdline(char *cmdline);
-	cmd_t *process_token_list(char **Argv, int in, int out,int err);
+//	cmd_t *process_token_list(char **Argv, int in, int out,int err);
 	void run_command_prologue(char *cmds);
 	void run_command_epilogue(char *cmds, sexp rv);
-	sexp run_commands(cmd_t *cmd);
-
-	cmd_t *C = 0;
+	//sexp run_commands(cmd_t *cmd);
 	int i  = 0, k = 0;
+	int status = 0;
+	
+	sexp rtv = SEXP_FALSE;
+	sexp_preserve_object(ctx, rtv);
 
+	ENTRY("");
 #if 0
 	for (i = 0; argv && argv[i]; i++) {
 		fprintf(stderr,"in eca[%d] %s\n", i, argv[i]);
 	}
 #endif
 
-	if (!argv || !*argv) return SEXP_NEG_ONE;
+
+	if (!argv || !*argv) {
+		DEPARTURE("");
+		return SEXP_NEG_ONE;
+	}
 
 	for (i = 0, k = 0; argv[i]; i++) k += strlen(argv[i])+1;
 
@@ -2219,27 +2532,21 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	// Call to run-command-prologue
 	run_command_prologue(cmds);
 
-	if (C) {
-		sexp rtv = SEXP_FALSE;
-		sexp_preserve_object(ctx, rtv);
+	fprintf(stderr,"EXECUTING: %s\n", cmds);
+	if (is_sexp(cmds)) status |= SCHEME_EXPRESSION;
 
-		rtv =  run_commands(C);
+	rtv = cs_execute(status ,argv, -1, -1, -1, NULL);
 
-	   // Call to run-command-epilogue (with return value)
-		run_command_epilogue(cmds, rtv);
+	run_command_epilogue(cmds, rtv);
 
-		free_cmd(C);
-
-		return rtv;
-	}
-	else {
-		return SEXP_NEG_ONE;
-	}
+	DEPARTURE("");
+	return SEXP_ZERO;
 }
 
-/*--- straight execution of  a commandline  */
 
-#if defined(RECURSIVE_DESCENT)
+
+/*----- straight execution of  a commandline  */
+
 sexp execute_command_string(char *cmds) { // The string cmds is freed!
 	sexp rv = SEXP_ZERO;
 	char **tokenise_cmdline(char *cmdline);
@@ -2247,67 +2554,15 @@ sexp execute_command_string(char *cmds) { // The string cmds is freed!
 
 	//fprintf(stderr,"ecs %s\n", cmds);
 
+	ENTRY("");
 	argv = tokenise_cmdline(cmds);
-
-/*
-	begin {
-		int i;
-		for (i = 0; argv && argv[i]; i++) {
-			fprintf(stderr,"ecs[%d] %s\n", i, argv[i]);
-		}
-	}
-*/
 	rv = execute_command_array(argv);
 	Free(argv);
+	DEPARTURE("");
 	return rv;
 }
-	
 
-#else
-sexp execute_command_string(char *cmds) { // The string cmds is freed!
-	char **tokenise_cmdline(char *cmdline);
-	cmd_t *process_token_list(char **Argv, int in, int out,int err);
-	void run_command_prologue(char *cmds);
-	void run_command_epilogue(char *cmds, sexp rv);
-	sexp run_commands(cmd_t *cmd);
-
-	char **argv = 0;
-	cmd_t *C = 0;
-
-	argv = tokenise_cmdline(cmds);
-
-	C = process_token_list(argv,0,1,2);
-	//fprintf(stderr,">%s<\n", cmds);
-	C->cmd = strdup(cmds);
-			
-	// Call to run-command-prologue
-	run_command_prologue(cmds);
-
-	if (C) {
-		sexp rtv = SEXP_FALSE;
-		sexp_preserve_object(ctx, rtv);
-
-		rtv =  run_commands(C);
-
-	   // Call to run-command-epilogue (with return value)
-		run_command_epilogue(cmds, rtv);
-		
-
-		free_cmd(C); // This will  free the strings for argv
-		Free(argv);
-
-		return rtv;
-	}
-	else {
-		free_null_terminated_pointer_array(argv);
-		//Free(argv);
-		return SEXP_NEG_ONE;
-	}
-	
-}
-#endif
-
-/*--- Run a command for a backquote substitution, à la     head `calc $LEN - $DELTA`  */
+/*----- Run a command for a backquote substitution, Ã  la     head `calc $LEN - $DELTA`  */
 
 char *backquote_system_call(char *str) {
 	char *fname = NULL;
@@ -2315,7 +2570,7 @@ char *backquote_system_call(char *str) {
 	struct stat stbuf[1];
 	sexp n = SEXP_FALSE;
 
-
+	ENTRY("");
 	asprintf(&fname, "/tmp/igor.%d.%d", igor_pid, serial_number++);
 	asprintf(&bqbuff,"%s > %s", str, fname);
 
@@ -2329,13 +2584,13 @@ char *backquote_system_call(char *str) {
 
 			insertionbuf = (char *)calloc(stbuf->st_size + 1, 0);
 			if (!insertionbuf) Abort("Out of memory in backquote expansion");
-						
+		
 			if (read(fd, insertionbuf, stbuf->st_size) != stbuf->st_size) Abort("Bad read in backquote expansion");
 			close(fd);
-						
+		
 			insertionbuf[stbuf->st_size] = 0; // null terminate the beastie
 			while (insertionbuf[strlen(insertionbuf)-1] == '\n') insertionbuf[strlen(insertionbuf)-1] = 0; // Eat the trailing space because its the Right Thing To Do.
-
+		
 			for (cursor = insertionbuf; *cursor; cursor++) {
 				if (strchr("\n\r\f\a\b", *cursor)) *cursor = ' ';
 			}
@@ -2343,10 +2598,13 @@ char *backquote_system_call(char *str) {
 			return insertionbuf;
 		}
 	}
+	DEPARTURE("");
 	return NULL;
 }
 
-/*--- Write an s-expression to the current output or error port */
+/*---- Execute scheme code.... */
+
+/*----- Write an s-expression to the current output or error port */
 
 void write_sexp(sexp ctx, sexp bit, int err) {
 	sexp_gc_var1(out);
@@ -2356,49 +2614,49 @@ void write_sexp(sexp ctx, sexp bit, int err) {
 	else out = sexp_current_output_port(ctx);
 
 	if (! sexp_oportp(out))	{
-		if (err) out = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
-		else out = sexp_make_output_port(ctx, stdout, SEXP_FALSE);
-	}
+	if (err) out = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
+	else out = sexp_make_output_port(ctx, stdout, SEXP_FALSE);
+}
 	sexp_write(ctx, bit, out);
 	sexp_newline(ctx,out);
 }
 
 
-/*--- Evaluate a string containing an s-expression (possibly with an input string) and return the result as a string  */
+/*----- Evaluate a string containing an s-expression (possibly with an input string) and return the result as a string  */
 char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { // This returns an allocated string which ought to be freed (ultimately)
 	char *sexpr = NULL;
 	begin {
-		char *psexpr = NULL;
-		int run_word_expand = 0;
-		char *wsexpr = NULL, *rstr = NULL;
-		sexp_gc_var1(result);
-		sexp_gc_preserve1(ctx, result);
+	char *psexpr = NULL;
+	int run_word_expand = 0;
+	char *wsexpr = NULL, *rstr = NULL;
+	sexp_gc_var1(result);
+	sexp_gc_preserve1(ctx, result);
 
 #if 0
-		if ((run_word_expand = (*sexpr == *shellcmd))) {
-			char *tp;
-			tp = strdup(Sexpr + 1);
-			psexpr = word_expand_string(tp);
-			Free(tp);
-			paren_protection(psexpr, escape, 0);
-		}
+	if ((run_word_expand = (*sexpr == *shellcmd))) {
+	char *tp;
+	tp = strdup(Sexpr + 1);
+	psexpr = word_expand_string(tp);
+	Free(tp);
+	paren_protection(psexpr, escape, 0);
+}
 #endif			
 		//sexpr_s=tarts = "([{";
 		//sexpr_starts = "([";
-		const char *sexpr_starts = "(";
+	const char *sexpr_starts = "(";
 
-		if (strchr(sexpr_starts, *Sexpr)) {
-			char *t = jump_sexp(Sexpr, '\\');
-			if (t == Sexpr) {
-				report_error(0,"Bad s-expression",Sexpr);
-				return strdup(Sexpr);
-			}
+	if (strchr(sexpr_starts, *Sexpr)) {
+		char *t = jump_sexp(Sexpr, '\\');
+		if (t == Sexpr) {
+			report_error(0,"Bad s-expression",Sexpr);
+			return strdup(Sexpr);
 		}
+	}
 
 		//fprintf(stderr,"## %s ##  %d  %d\n", Sexpr, is_sexp(Sexpr), is_unfinished_sexp(Sexpr));
-		if (is_unfinished_sexp(Sexpr) || !is_sexp(Sexpr)) return strdup(Sexpr);
+	if (is_unfinished_sexp(Sexpr) || !is_sexp(Sexpr)) return strdup(Sexpr);
 
-		sexpr = guard_definitions(((run_word_expand && psexpr) ? psexpr : Sexpr));
+	sexpr = guard_definitions(((run_word_expand && psexpr) ? psexpr : Sexpr));
 
 
 //#define START_EVAL_BLOCK "   (let ((rslt #f)) (set! rslt (display-to-string %s))" 
@@ -2407,75 +2665,72 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 #define END_EVAL_BLOCK ")"
 
 /*
-		if (!inputstring) {
+  if (!inputstring) {
 
 
-			asprintf(&wsexpr, 
-				"(let* ((stdin-list (lambda () (display \"You cannot use stdin or stdin-list without input!\n\") *eof*)) (stdin stdin-list))"
-				START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
-				);
-		}
-		else if (!*inputstring) {
-			asprintf(&wsexpr, 
-				"(let* ((stdin-list (lambda () *eof*)) (stdin stdin-list))"
-				START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
-				);
-		}
-		else {
-			asprintf(&wsexpr, 
-				"(let* ((stdin-list #f) (stdin #f))"
-				"  (let ((lst (collapsing-strtok \"%s\")))"
-				"    (set! stdin (lambda () (if (pair? lst) (let ((a (car lst)))(set! lst (cdr lst)) a) *eof*)))"
-				"    (set! stdin-list (lambda () (if (pair? lst) (let ((a lst)) (set! lst *eof*) a) *eof*)))"
-				START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
-				inputstring, sexpr);
-		}
+  asprintf(&wsexpr, 
+  "(let* ((stdin-list (lambda () (display \"You cannot use stdin or stdin-list without input!\n\") *eof*)) (stdin stdin-list))"
+  START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
+  );
+  }
+  else if (!*inputstring) {
+  asprintf(&wsexpr, 
+  "(let* ((stdin-list (lambda () *eof*)) (stdin stdin-list))"
+  START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
+  );
+  }
+  else {
+  asprintf(&wsexpr, 
+  "(let* ((stdin-list #f) (stdin #f))"
+  "  (let ((lst (collapsing-strtok \"%s\")))"
+  "    (set! stdin (lambda () (if (pair? lst) (let ((a (car lst)))(set! lst (cdr lst)) a) *eof*)))"
+  "    (set! stdin-list (lambda () (if (pair? lst) (let ((a lst)) (set! lst *eof*) a) *eof*)))"
+  START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
+  inputstring, sexpr);
+  }
 
 */
 
-		asprintf(&wsexpr, 
-			START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
-			sexpr
-			);
-
-
-
+	asprintf(&wsexpr, 
+		START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
+		sexpr
+		);
 
 		//fprintf(stderr,"@@ %s @@\n", wsexpr);
 
-		result = check_exception(emit, ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
+	result = check_exception(emit, ctx, sexp_eval_string(ctx, wsexpr, -1, ENV), "There was an error in:", sexpr);
 
-		begin{
-			char *p =  (sexp_stringp(result) ? sexp_string_data(result) : NULL);
+	begin{
+		char *p =  (sexp_stringp(result) ? sexp_string_data(result) : NULL);
 
-			if (result == SEXP_VOID || result == SEXP_UNDEF 
-				|| (p && (!*p || !strcmp(p, "#<undef>") || !strcmp(p, "#<void>")))) {
-				rstr = strdup("");
-			}
-			else if (sexp_stringp(result)) rstr = strdup(sexp_string_data(result));
-			else {
-				asprintf(&rstr,"Failed to evaluate [%s]", sexpr);
-			}
-			
+		if (result == SEXP_VOID || result == SEXP_UNDEF 
+			|| (p && (!*p || !strcmp(p, "#<undef>") || !strcmp(p, "#<void>")))) {
+			rstr = strdup("");
 		}
-		Free(wsexpr);
-		Free(psexpr);
-		Free(sexpr);
+		else if (sexp_stringp(result)) rstr = strdup(sexp_string_data(result));
+		else {
+			asprintf(&rstr,"Failed to evaluate [%s]", sexpr);
+		}
+			
+	}
+	Free(wsexpr);
+	Free(psexpr);
+	Free(sexpr);
 
-		sexp_gc_release1(ctx);
+	sexp_gc_release1(ctx);
 		
-		return rstr;
+	return rstr;
 
 /*
-		sexp_string_data(sexp)
-		sexp_sint_value(sexp)
-		sexp_uint_value(sexp)
+  sexp_string_data(sexp)
+  sexp_sint_value(sexp)
+  sexp_uint_value(sexp)
 */
 
 	}
 }
 
-/*---  char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)   */
+/*-----  char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)   */
 /* This returns the exit value of the scheme expression */
 
 char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring) { // This returns an allocated string which ought to be freed (ultimately)
@@ -2501,8 +2756,615 @@ char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)
 
 
 
-/*-- Parsing the command line  */
-/*---  Tokenise the command line and return an array of elements */
+
+#if 0
+/**
+ * executes a program redirecting STDIN or STDOUT if newDescriptor != STANDARD
+ */
+void executeCommand(char *command[], char *file, int newDescriptor, int executionMode) {
+	int STDIN_FILENO=0, STDOUT_FILENO=1, STDIN=1, STDOUT=2;
+	int commandDescriptor;
+        /**
+         *  Set the STDIN/STDOUT channels of the new process.
+         */
+	if (newDescriptor == STDIN) {
+		commandDescriptor = open(file, O_RDONLY, 0600);                                        // open file for read only (it's STDIN)
+		dup2(commandDescriptor, STDIN_FILENO);
+		close(commandDescriptor);
+	}
+	if (newDescriptor == STDOUT) {
+		commandDescriptor = open(file, O_CREAT | O_TRUNC | O_WRONLY, 0600); // open (create) the file truncating it at 0, for write only
+		dup2(commandDescriptor, STDOUT_FILENO);
+		close(commandDescriptor);
+	}
+	if (execvp(*command, command) == -1)
+		perror("BD-shell(execvp)");
+}
+
+/**
+ * forks a process and launches a program as child
+ */
+void launchJob(char *command[], char *file, int newDescriptor, int executionMode) {
+	pid_t pid;
+	pid = fork();
+	switch (pid) {
+	case -1:
+		perror("BD-shell(fork)");
+		exit(EXIT_FAILURE);
+		break;
+	case 0:
+                /**
+                 *  we set the handling for job control signals back to the default.
+                 */
+		signal(SIGINT, SIG_DFL);
+		signal(SIGQUIT, SIG_DFL);
+		signal(SIGTSTP, SIG_DFL);
+		signal(SIGCHLD, &signalHandler_child);
+		signal(SIGTTIN, SIG_DFL);
+		usleep(20000);                                                             // fixes a synchronization bug. Needed for short commands like ls
+		setpgrp();                                                                                     // make the child as new process group leader
+		if (executionMode & FOREGROUND)
+			tcsetpgrp(ttyfd, getpid());                                           // if we want the process to be in foreground
+		if (executionMode & BACKGROUND)
+			printf("%d\n", (int) getpid());              // inform the user about the new job in bg
+					 
+		executeCommand(command, file, executionMode);
+
+		exit(EXIT_SUCCESS);
+		break;
+	default:
+		setpgid(pid, pid);                                                                        // we also make the child a new process group leader from here
+                // to avoid race conditions
+		proclist = insertJob(pid, pid, *(command), file, (int) executionMode); // insert the job in the list
+
+		process_list_t* job = get_procid(proclist, pid);                             // and get it as job object
+
+		if (executionMode & FOREGROUND) {
+			putJobForeground(job, 0);                                              // put the job in foreground (if desired)
+		}
+		if (executionMode & BACKGROUND)
+			putJobBackground(job, 0);                                             // put the job in background (if desired)
+		break;
+	}
+}
+
+#endif
+
+
+/*----     Execute a command -- C dispatch function */
+
+/**/
+
+
+/*----- int dispatch_scheme(char **argv, int input, int output, int error, char *inputstring)  -- execute a scheme expression  */
+
+char *dispatch_scheme(char **argv, int input, int output, int error, char *inputstring) {
+	int i;
+	char *ss = NULL;
+	fprintf(stderr,"Dispatching");
+	for (i = 0; argv && argv[i]; i++) fprintf(stderr," %s", argv[i]);
+	fprintf(stderr,"\n");
+
+	for (i = 0; argv[i]; i++) {
+		if (ss) Free(ss);
+		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+			ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
+		}
+	}
+	return ss;
+}
+
+/*----- int cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) -- execute a command or scheme expression  */
+
+int cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) {
+	int parentid = igor_pid, procid = -1;
+	int gid = igor_pgid;
+	int cstate = 0;
+	int rts = 0;
+
+	char *cmd = *argv;
+	char *returnstr = NULL;
+	process_list_t* job = NULL;
+
+	ENTRY("");
+
+#define ifewsxz if  // Westley, the Dread Pirate Rabbits added the "ewsxz".  
+	                    // If one can't have input into the C standard just because one
+                       // is a rabbit, then there is something dreadfully unfair....
+                       
+	ifewsxz (!cmd || !*cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
+
+
+	if (status & SCHEME_EXPRESSION) {
+		TRACK;
+		returnstr = dispatch_scheme(argv,input,output,error,inputstring);
+		write(output, returnstr, strlen(returnstr));
+		write(output, "\n", 1);
+		rts = 0;
+	}
+	else {
+		TRACK;
+
+		if (1) { // Rewrite arguments which should be evaluated as scheme expressions
+			int i = 0;
+			for (i = 1; argv[i]; i++) {
+				if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+					char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
+					if (ss) {
+						Free(argv[i]);
+						argv[i] = ss;
+					}
+				}
+			}
+		}
+
+		procid = fork();
+
+		if (procid > 0) { // this is the parent
+			setpgid(procid, procid); // make the child a process group leader
+
+			proclist = insert_job(proclist, parentid, procid, getpgid(parentid), argv, SUSPENDED);  // Neither forground nor background at the moment, and not running yet
+			job = get_procid(proclist, procid);                             // and get it as job object
+
+#if defined(YUP_IT_WORKS)
+			if (status & FOREGROUND || !(status & BACKGROUND)) {
+				rts = foreground_job(job, 0);
+			}
+			if (status & BACKGROUND) {
+				rts = background_job(job, 0);
+			}
+#else
+			if (!(status & BACKGROUND)) {
+				procid = waitpid(procid, &cstate, 0);
+			//waitpid(procid, &cstate, 0);
+			}
+			else if (status & BACKGROUND) {
+				char *bgpid;
+				asprintf(&bgpid,"%d",procid);
+				if (bgpid) {
+					igor_set(ctx,"$!", bgpid);
+					Free(bgpid);
+				}
+			
+				fprintf(stderr,"[started background process: %s]\n", cmd);
+				TRACK;
+			}
+#endif
+			asprintf(&returnstr,"%d", rts);
+			TRACK;
+		}
+		else if (procid == 0) { // this is the child
+			int n = 0;
+			fflush(stderr);
+
+			adjust_fd(input,0);
+			adjust_fd(output,1);
+			adjust_fd(error,2);
+
+			Dprintf("Child (%s) about to exec\n",cmd);
+			signal(SIGTERM, SIG_DFL);
+			signal(SIGINT, SIG_DFL);
+			signal(SIGQUIT, SIG_DFL);
+			signal(SIGTSTP, SIG_DFL);
+			signal(SIGCHLD, &signalhandler);
+			signal(SIGTTIN, SIG_DFL);
+
+			usleep(20000);                                                             // fixes a synchronization bug. Needed for short commands like ls
+			setpgrp();                                                                                     // make the child as new process group leader
+		
+			if (status & FOREGROUND) tcsetpgrp(ttyfd, getpid());
+			else if (NOTIFY_BG_PID && (status & BACKGROUND)) printf("%d\n", (int) getpid());              // inform the user about the new job in bg
+
+			begin {
+				char *tcmd = completed_path(cmd);
+			//char *tcmd = strdup(cmd);
+			//if (tcmd) fprintf(stderr,"%s (%d)\n", tcmd, access(tcmd, X_OK));
+
+				if (tcmd && access(tcmd, X_OK) == Ok) {
+					int q = 0;
+				
+					for (q = 0; track_execv && argv && argv[q]; q++) {
+						if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
+						fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
+					}
+
+					if ((n = execv(tcmd, argv)) == -1) {
+		            //time(&then);
+						report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
+					}
+					else {
+					//fprintf(stderr,"Goodo.\n");
+			         //time(&then);
+			         //proc_finished(procid, then);
+					}
+					delete_string_array(argv);
+					Free(tcmd);
+
+					close_up_shop();
+					exit(n); // if the process doesn't go, we need to dispatch it
+				}
+				else {
+					report_error(0,"Unable to execute program", argv[0]);
+					if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
+					else {
+						if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
+						else report_error(0,"The file was not found", cmd);
+					}
+					delete_string_array(argv);
+					Free(tcmd);
+
+					close_up_shop();
+					exit(ENOENT);
+				}
+			}
+		}
+		else {
+			report_error(errno, "Failed to fork", NULL);
+//		sexp_destroy_context(ctx);
+			return -1;
+		}
+		
+
+	}
+	return rts;
+}
+
+
+#if 0
+REMOVE
+
+/*----- int c_execute(int status, char **argv, int input, int output, int error, char *inputstring) {  */
+
+int c_execute(int status, char **argv, int input, int output, int error, char *inputstring) {
+	int parentid = igor_pid, procid = -1;
+	int gid = igor_pgid;
+
+	int rts = 0; 
+
+	char *cmd = *argv;
+	char *returnstr = NULL;
+	process_list_t *job = NULL;
+
+	ENTRY("");
+
+//#define ifewsxz if  // Westley, the Dread Pirate Rabbits added the "ewsxz".  
+	                    // If one can't have input into the C standard just because one
+                       // is a rabbit, then there is something dreadfully unfair....
+                       
+	ifewsxz (!cmd || !*cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
+
+
+	if (status & SCHEME_EXPRESSION) {
+		TRACK;
+		returnstr = dispatch_scheme(argv,input, output, error, inputstring);
+		rts = 0;
+	}
+	else {
+		TRACK;
+
+		if (0) { // Rewrite arguments which should be evaluated as scheme expressions
+			int i = 0;
+			for (i = 1; argv[i]; i++) {
+				if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+					char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
+					if (ss) {
+						Free(argv[i]);
+						argv[i] = ss;
+					}
+				}
+			}
+		}
+
+		procid = fork();
+
+		if (procid > 0) { // This is the parent
+			int cid = 0;
+			int cstate= -1;
+
+			if (!(status & BACKGROUND)) {
+				cid = waitpid(procid, &cstate, 0);
+			//waitpid(procid, &cstate, 0);
+			}
+			else if (status & BACKGROUND) {
+				char *bgpid;
+				asprintf(&bgpid,"%d",procid);
+				if (bgpid) {
+					igor_set(ctx,"$!", bgpid);
+					Free(bgpid);
+				}
+			
+				fprintf(stderr,"[started background process: %s]\n", cmd);
+				TRACK;
+			}
+			TRACK;
+
+			if (input > 2 && close(input) == -1) perror("cannot close stdin");
+			if (output > 2 && close(output) == -1) perror("cannot close stdout");
+
+			if (cid == -1 && errno != ECHILD) perror("wait error");
+
+			if (error > 2 && close(error) == -1) perror("cannot close stderr");
+
+			DEPARTURE("");
+			return cstate;
+		}
+		else if (procid == 0) { // this is the child
+			int n = 0;
+			fflush(stderr);
+
+			adjust_fd(input,0);
+			adjust_fd(output,1);
+			adjust_fd(error,2);
+
+			Dprintf("Child (%s) about to exec\n",cmd);
+			signal(SIGINT, SIG_DFL);
+			signal(SIGQUIT, SIG_DFL);
+			signal(SIGTERM, SIG_DFL);
+			signal(SIGTSTP, SIG_DFL);
+			signal(SIGCHLD, &signalhandler);
+			signal(SIGTTIN, SIG_DFL);
+		
+			if (!(status & SCHEME_EXPRESSION)) {
+				if (1) {
+					int i = 0;
+					for (i = 1; argv[i]; i++) {
+						if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
+							char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
+							if (ss) {
+								Free(argv[i]);
+								argv[i] = ss;
+							}
+						}
+					}
+				}
+				
+				begin {
+					char *tcmd = completed_path(cmd);
+			//char *tcmd = strdup(cmd);
+			//if (tcmd) fprintf(stderr,"%s (%d)\n", tcmd, access(tcmd, X_OK));
+					
+					if (tcmd && access(tcmd, X_OK) == Ok) {
+						int q = 0;
+				
+						for (q = 0; track_execv && argv && argv[q]; q++) {
+							if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
+							fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
+						}
+						
+						if ((n = execv(tcmd, argv)) == -1) {
+		            //time(&then);
+							report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
+						}
+						else {
+					//fprintf(stderr,"Goodo.\n");
+			         //time(&then);
+			         //proc_finished(procid, then);
+						}
+						delete_string_array(argv);
+						Free(tcmd);
+
+						close_up_shop();
+						exit(n); // if the process doesn't go, we need to dispatch it
+					}
+					else {
+						report_error(0,"Unable to execute program", argv[0]);
+						if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
+						else {
+							if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
+							else report_error(0,"The file was not found", cmd);
+						}
+						delete_string_array(argv);
+						Free(tcmd);
+
+						close_up_shop();
+						exit(ENOENT);
+					}
+				}
+			}
+			else {
+
+				if (returnstr){
+					write(output, returnstr, strlen(returnstr));
+					write(output, "\n", 1);
+				}
+				delete_string_array(argv);
+				close_up_shop();
+				exit(0);
+			}
+		}	
+		else {
+			report_error(errno, "Failed to fork", NULL);
+//		sexp_destroy_context(ctx);
+			return -1;
+		}
+	}
+	DEPARTURE("");
+	return 0;
+}
+#endif
+
+
+
+
+/*----- job support routines */
+
+//  waits for a job, blocking unless it has been suspended;  deletes the job after it has been executed
+
+int wait_on_job(process_list_t* job) {
+	int status, exitval = 0;
+	printf("...WAITING\n");
+	for(; ((exitval = waitpid(job->pid, &status, WNOHANG)) == 0);) {      // While there are still active offspring....
+		if (job->suspended) return exitval;                       // suspended, so return to "parent"
+	}
+	printf("...DONE!\n");
+	
+	// Must have reached a terminating condition, so clean up and return
+	proclist = delete_jobptr(proclist, job);                            
+	return exitval;
+}
+
+/**
+ * puts a job in foreground. If continueJob = TRUE, sends the process group
+ * a SIGCONT signal to wake it up. After the job is waited successfully, it
+ * restores the control of the terminal to the shell
+ */
+int foreground_job(process_list_t* job, int please_continue) {
+	int rts = 0;
+	
+	if (!job) return 0;
+	
+	//printf("*** %o %o %o\n", job->status, (~BACKGROUND & job->status), (~BACKGROUND & job->status) | FOREGROUND);
+
+	job->background = 0;
+	//job->status = (~BACKGROUND & job->status) | FOREGROUND; // clear background flag, set forground flag
+	
+	tcsetpgrp(ttyfd, job->pgid);                            // give it the control of the terminal
+	if (please_continue) {                                  // continue the job (if desired)
+		if (kill(-job->pgid, SIGCONT) < 0)                   // by sending it a SIGCONT signal
+			perror("kill (SIGCONT)");
+	}
+	
+	rts = wait_on_job(job);                                           // wait for the job
+
+	tcsetpgrp(ttyfd, ttypgid);                              // give the shell control of the terminal
+	return rts;
+}
+
+/**
+ * puts a job in background, and sends the job a continue signal, if continueJob = TRUE
+ * puts the shell in foreground
+ */
+int background_job(process_list_t* job, int please_continue) {
+	if (!job) return  0;
+
+	if (please_continue) {
+		if (job->blocked_on_input) job->blocked_on_input = 0; /*  */
+
+           // fixes another synchronization bug: if the child process launches
+		     // a SIGCHLD and is set to BLOCKED_ON_INPUT before this point has been
+           // reached, then it would be set to BACKGROUND again
+
+		if (kill(-job->pgid, SIGCONT) < 0) {
+			perror("kill (SIGCONT)");
+			return SIGABRT;
+		}
+	}
+
+	tcsetpgrp(ttyfd, ttypgid);                             // paranoia: give the shell control of terminal
+	return 0;
+}
+
+/**
+ * kills a Job given its number
+ */
+void kill_job(int jid)
+{
+	process_list_t *job = get_jobid(proclist, jid);                                   // get the job from the list
+	kill(job->pid, SIGKILL);                                                               // send the job a SIGKILL signal
+}
+
+/*--- Parsing the command line  */
+
+/*---- handle filename globbing */
+
+char *handle_filename(char *s) {
+	wordexp_t arg;
+	char *t = NULL;
+	int n = 0;
+
+	if (*s == '(') { // Kludge!
+		if (is_sexp(s)) {
+			t = evaluate_scheme_expression(0, s,NULL);
+			if (!*t) {
+				Free(t);
+				return NULL;
+			}
+		}
+		else {
+			t = strdup(s);
+		}
+	}
+	else {
+		n = wordexp(s, &arg, 0);
+		
+		if (n != 0) {
+			// We need to tease this out a bit
+			t = strdup(s);
+		}
+		else {
+			if (arg.we_wordc <= 0) {
+				wordfree(&arg);
+				return NULL;
+			}
+			else if (arg.we_wordc > 1) {
+				int i = 0;
+
+				fprintf(stderr,"igor: Multiple filenames in redirection!: %s", arg.we_wordv[0]);
+				for (i = 1; i < arg.we_wordc; i++) fprintf(stderr,", %s", arg.we_wordv[i]);
+				fprintf(stderr,"\n");
+			}
+
+			else {
+				t = strdup(arg.we_wordv[0]);
+				wordfree(&arg);
+			}
+		}
+	}
+	return t;
+}
+
+/*---- Expand words in an array of strings  */
+
+char **word_expansion(char **argv, int *argc, int argix) {
+	wordexp_t arg;
+	int n =  0;
+	int err = 0;
+
+	if (!argv || argix >= *argc || !argv[argix] || !*argv[argix]) return argv;
+
+	err = wordexp(argv[argix], &arg, 0);
+
+	if (err) return NULL;
+
+	n = arg.we_wordc + *argc + 1;
+	
+	if (arg.we_wordc == 0) {
+		int j = 0;
+		//char *s = argv[argix];
+		for (j = argix; j < *argc; j++) argv[j] = argv[j+1];
+		*argc = *argc-1;
+		//Free(s); // I hope this is ok! .. maybe not?
+	}
+	else if (arg.we_wordc == 1) {
+		int sn = strlen(arg.we_wordv[0]);
+		if (strlen(argv[argix]) < sn) argv[argix] = (char *)reallocate(argv[argix], (sn+2) * sizeof(char));
+		strcpy(argv[argix], arg.we_wordv[0]);
+	}
+	else {
+		int i = 0;
+		argv = (char **)reallocate(argv,sizeof(char **) * (n+1));
+		for (i = *argc; i <= n && argv; i++) argv[i] = 0;
+		if (!argv) Abort("Out of memory: no argv!");
+
+		memmove(argv + argix + 1, argv + arg.we_wordc - 1, (*argc-argix)* sizeof(char *)); // ought to move the pointers appropriately
+		Free(argv[argix]);
+
+		for (i = 0; i < arg.we_wordc; i++) {
+			argv[i+argix] = strdup(arg.we_wordv[i]);
+
+			//argv[i+argix] = (char *)reallocate(argv[i+argix], (strlen(arg.we_wordv[i])+1) * sizeof(char));
+			//strcpy(argv[i+argix], arg.we_wordv[i]);
+		}
+
+		*argc = *argc + arg.we_wordc - 1;
+	}
+		
+	wordfree(&arg);
+	return argv;
+}
+
+
+/*---- Tokenise the command line and return an array of elements */
 
 // This returns a null terminated array of strings (like argv)
 char **tokenise_cmdline(char *cmdline) {
@@ -2511,7 +3373,7 @@ char **tokenise_cmdline(char *cmdline) {
 	char *cp = NULL;
 	char *collecting = NULL;
 	int i = 0;
-	int CSIZE = 0;
+	int csize = 0;
 
 	if (!cmdline || !*cmdline) {
 		return NULL;
@@ -2521,8 +3383,8 @@ char **tokenise_cmdline(char *cmdline) {
 
 	cp = cmdline; // readline allocates this,
 
-	CSIZE = strlen(cmdline)+1;
-	collecting = (char *)calloc(CSIZE,1);
+	csize = strlen(cmdline)+1;
+	collecting = (char *)calloc(csize,1);
 	argv = (char **)calloc(1, sizeof(char *));
 
 	for (*collecting = 0, i = 0;; )  {
@@ -2589,7 +3451,7 @@ char **tokenise_cmdline(char *cmdline) {
 			char *tcp = jump_sexp(cp+1, sescape);
 			int n = collecting?strlen(collecting):1;
 
-			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)reallocate(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
+			if (!collecting || n+tcp-cp > csize) collecting = (char *)reallocate(collecting, (n+tcp-cp + csize)*sizeof(char));
 			strncpy(collecting+i, cp, tcp - cp);
 			collecting[i+tcp - cp] = 0;
 
@@ -2662,7 +3524,7 @@ char **tokenise_cmdline(char *cmdline) {
 			char *tcp = jump_sexp(cp, sescape); 
 			int n = collecting?strlen(collecting):1;
 
-			if (!collecting || n+tcp-cp > CSIZE) collecting = (char *)reallocate(collecting, (n+tcp-cp + CSIZE)*sizeof(char));
+			if (!collecting || n+tcp-cp > csize) collecting = (char *)reallocate(collecting, (n+tcp-cp + csize)*sizeof(char));
 			strncpy(collecting+i, cp, tcp - cp);
 			collecting[i+tcp - cp] = 0;
 
@@ -2828,1892 +3690,20 @@ char **tokenise_cmdline(char *cmdline) {
 
 	Free(collecting);
 
-	
-
-
-
-
 	return argv;
 }
 
-/*--- handle filename globbing */
+/*---- Recursive descent parser */
+/*----- run_recursive_descent routines */
 
-char *handle_filename(char *s) {
-	wordexp_t arg;
-	char *t = NULL;
-	int n = 0;
-
-	if (*s == '(') { // Kludge!
-		if (is_sexp(s)) {
-			t = evaluate_scheme_expression(0, s,NULL);
-			if (!*t) {
-				Free(t);
-				return NULL;
-			}
-		}
-		else {
-			t = strdup(s);
-		}
-	}
-	else {
-		n = wordexp(s, &arg, 0);
-		
-		if (n != 0) {
-			// We need to tease this out a bit
-			t = strdup(s);
-		}
-		else {
-			if (arg.we_wordc <= 0) {
-				wordfree(&arg);
-				return NULL;
-			}
-			else if (arg.we_wordc > 1) {
-				int i = 0;
-
-				fprintf(stderr,"igor: Multiple filenames in redirection!: %s", arg.we_wordv[0]);
-				for (i = 1; i < arg.we_wordc; i++) fprintf(stderr,", %s", arg.we_wordv[i]);
-				fprintf(stderr,"\n");
-			}
-
-			else {
-				t = strdup(arg.we_wordv[0]);
-				wordfree(&arg);
-			}
-		}
-	}
-	return t;
-}
-
-/*--- Expand words in an array of strings  */
-
-char **word_expansion(char **argv, int *argc, int argix) {
-	wordexp_t arg;
-	int n =  0;
-	int err = 0;
-
-	if (!argv || argix >= *argc || !argv[argix] || !*argv[argix]) return argv;
-
-	err = wordexp(argv[argix], &arg, 0);
-
-	if (err) return NULL;
-
-	n = arg.we_wordc + *argc + 1;
-	
-	if (arg.we_wordc == 0) {
-		int j = 0;
-		//char *s = argv[argix];
-		for (j = argix; j < *argc; j++) argv[j] = argv[j+1];
-		*argc = *argc-1;
-		//Free(s); // I hope this is ok! .. maybe not?
-	}
-	else if (arg.we_wordc == 1) {
-		int sn = strlen(arg.we_wordv[0]);
-		if (strlen(argv[argix]) < sn) argv[argix] = (char *)reallocate(argv[argix], (sn+2) * sizeof(char));
-		strcpy(argv[argix], arg.we_wordv[0]);
-	}
-	else {
-		int i = 0;
-		argv = (char **)reallocate(argv,sizeof(char **) * (n+1));
-		for (i = *argc; i <= n && argv; i++) argv[i] = 0;
-		if (!argv) Abort("Out of memory: no argv!");
-
-		memmove(argv + argix + 1, argv + arg.we_wordc - 1, (*argc-argix)* sizeof(char *)); // ought to move the pointers appropriately
-		Free(argv[argix]);
-
-		for (i = 0; i < arg.we_wordc; i++) {
-			argv[i+argix] = strdup(arg.we_wordv[i]);
-
-			//argv[i+argix] = (char *)reallocate(argv[i+argix], (strlen(arg.we_wordv[i])+1) * sizeof(char));
-			//strcpy(argv[i+argix], arg.we_wordv[i]);
-		}
-
-		*argc = *argc + arg.we_wordc - 1;
-	}
-		
-	wordfree(&arg);
-	return argv;
-}
-
-
-/*--  process_token_list -- Convert the array of tokens into a command chain.  Sets up the redirections ... */
-
-cmd_t *process_token_list(char **Argv, int in, int out,int err) {
-	int Argc = 0;
-
-	int i = 0;
-	cmd_t *C = new_cmd_t();
-	char *fname = NULL;
-
-	for (Argc = 0; Argv[Argc]; Argc++) {
-		//char *s = Argv[Argc];
-		//if (is_magic(s) || strchr("(),|&;<>{}", *s)) continue;
-
-		//DPTprintf("DPT Argv[%d] = \"%s\"\n",Argc, Argv[Argc]);
-	}
-
-	C->argv = (char **)calloc(Argc+1, sizeof(char **)); // argv *must* be null terminated
-
-	C->in = in;
-	C->out = out;
-	C->err = err;
-	
-//	C->inport = sexp_input_port(C->in);
-//	C->outport = sexp_input_port(C->out);
-//	C->errport = sexp_input_port(C->err);
-
-//	C->inport = inport;
-//	C->outport = outport;
-//	C->errport = errport;
-	
-	
-/*
-#warning ---------------------------------------------------------------
-#warning I need to convert bare scheme expressions to a fork and print that
-#warning we can use to pipe into other things or ... stuff.
-#warning ---------------------------------------------------------------
-*/
-
-	for (i = 0; Argv && i < Argc; i++) {
-		if (!Argv[i] || !Argv[i][0]) continue;
-
-		if (is_magic(Argv[i])) {
-			if (0) {}
-			//if (strcmp("(,", *Argv[i])) { // Catch the scheme stuff early
-			//}
-			else if (!strncmp(Argv[i], quotedlist, strlen(quotedlist)) || !strncmp(Argv[i], shellcmd, strlen(shellcmd))) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", 
-					__FUNCTION__, 
-					__LINE__, 
-					Argv[i], 
-					(C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				C->run_scheme_expression = 1;
-				C->argv[C->argc++] = Argv[i];
-				C->argv[C->argc] = 0;
-			}
-			else if (!strcmp(Argv[i], heredoc)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				report_error(0,"here documents not supported yet", NULL);
-				C->errcond = 255;
-				return C;
-			}
-			else if (!strcmp(Argv[i], stdoutapp)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to append stdout to!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					C->out = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (C->out < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-			}
-			else if (!strcmp(Argv[i], stderrapp)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to append stderr to!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					C->err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (C->err < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-			}
-			else if (!strcmp(Argv[i], stdouterrapp)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to append stdout and stderr to!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					C->out = C->err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (C->out < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-			}
-			else if (!strcmp(Argv[i], stdinredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to read as stdin!", NULL);
-
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					C->in = open(fname, O_RDONLY);
-					if (C->in < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-				
-			}
-			else if (!strcmp(Argv[i], stdoutredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to write stdout to!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					if (access(fname,F_OK) == Ok) unlink(fname);
-					C->out = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (C->out < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-			}
-			else if (!strcmp(Argv[i], stderredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to write stderr to!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					if (access(Argv[i], F_OK) == Ok) unlink(fname);
-					C->err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (C->err < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-			}
-			else if (!strcmp(Argv[i], stdouterredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to write stderr to!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				if (fname && *fname) {
-					if (access(fname, F_OK) == Ok) unlink(fname);
-					C->out = C->err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (C->out < 0) {
-						C->errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else C->errcond = 1;
-			}
-			else if (!strcmp(Argv[i], outpipe)) {
-				i++;
-				/*** NEED TO MAKE THIS WORK, NEED TO MAKE THE REMAINING TWO CASES WORK  ***/
-
-				if (0) {;}
-#if 0
-				else if (C->argv[0] && is_sexp(C->argv[0]) && is_sexp(Argv[i])) { // an s-expression piping into another s-expression
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-
-					C->input_from_sexp = C->output_to_sexp = 1;
-					C->next = process_token_list(Argv + i, in, out, err);
-				}
-				else if (C->argv[0] && !is_sexp(C->argv[0]) && is_sexp(Argv[i])) { // a program piping into an s-expression
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					report_error(0, "'cmd | (sexp)' is not working yet", NULL);
-
-					C->input_from_sexp = 0; C->output_to_sexp = 1;
-					C->next = process_token_list(Argv + i, in, out, err);
-
-					return C;
-				}
-// This one works normally, 
-//				else if (C->argv[0] && is_sexp(C->argv[0]) && !is_sexp(Argv[i])) { // an s-expression piping into a program
-//					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-//					report_error(0, "'(sexp) | cmd' is not working yet", NULL);
-//
-//					C->next = process_token_list(Argv + i, in, out, err);
-//					C->next->input_from_sexp = 1; C->output_to_sexp = 0;
-//					return C;
-//				}
-#endif
-				else {
-					int pipefd[2] = {-1, -1}; // you read from pipefd[0] and write to pipefd[1]
-					//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-
-					if (i >= Argc) {
-						report_error(0, "Nothing specified to write stdout to!", NULL);
-						C->errcond = 1;
-						return C;
-					}
-
-					C->input_from_sexp = 0; C->output_to_sexp = 0;
-					C->argv[C->argc] = 0;
-					
-					pipe(pipefd);
-					C->out = pipefd[1];
-					C->shuto = 1;
-					C->next = process_token_list(Argv + i, pipefd[0], out, err);
-					return C;
-				}
-			}
-			else if (!strcmp(Argv[i], errpipe)) {
-				i++;
-				if (C->argv[0] && is_sexp(C->argv[0]) && is_sexp(Argv[i])) { // both the command that we've been collecting and the next are s-exprs
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-
-				}
-				else if (C->argv[0] && !is_sexp(C->argv[0]) && is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					
-				}
-				else if (C->argv[0] && is_sexp(C->argv[0]) && !is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					
-				}
-				else {
-					int pipefd[2] = {-1, -1}; // you read from pipefd[0] and write to pipefd[1]
-					DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-					if (i >= Argc) {
-						report_error(0, "Nothing specified to write stderr to!", NULL);
-						C->errcond = 1;
-						return C;
-					}
-					C->argv[C->argc] = 0;
-				
-					pipe(pipefd);
-
-					C->err = pipefd[1];
-					C->shute = 1;
-					C->next = process_token_list(Argv + i, pipefd[0], out, err);
-					return C;
-				}
-			}
-			else if (!strcmp(Argv[i], outerrpipe)) {
-				if (C->argv[0] && is_sexp(C->argv[0]) && is_sexp(Argv[i])) { // both the command that we've been collecting and the next are s-exprs
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					
-				}
-				else if (C->argv[0] && !is_sexp(C->argv[0]) && is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					
-				}
-				else if (C->argv[0] && is_sexp(C->argv[0]) && !is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)", Argv[i]);
-					
-					
-				}
-				else {
-					int pipefd[2] = {-1, -1}; // you read from pipefd[0] and write to pipefd[1]
-					DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-					i++;
-					if (i >= Argc) {
-						report_error(0,"Nothing specified to write stdout and stderr to!", NULL);
-						C->errcond = 1;
-						return C;
-					}
-					C->argv[C->argc] = 0;
-				
-					pipe(pipefd);
-
-					C->out = C->err = pipefd[1];
-					C->shuto = C->shute = 1;
-					C->next = process_token_list(Argv + i, pipefd[0], out, err);
-					return C;
-				}
-			}
-			else if (!strcmp(Argv[i], makebg)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				C->argv[C->argc+1] = 0;
-				C->bg = 1;
-				C->argv[C->argc] = 0;
-				
-				C->next = process_token_list(Argv + i, in, out, err);
-				return C;
-			}
-			else if (!strcmp(Argv[i], nextsep)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				C->argv[C->argc+1] = 0;
-				C->next = process_token_list(Argv + i, in, out, err);
-				return C;
-			}
-			else if (!strcmp(Argv[i], andsep)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				if (C->or_next) {
-					report_error(0, "Both || and && were used to separate this command from the previous one!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-				C->argv[C->argc+1] = 0;
-				C->and_next = 1;
-				C->next = process_token_list(Argv + i, in, out, err);
-				return C;
-			}
-			else if (!strcmp(Argv[i], orsep)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				if (C->and_next) {
-					report_error(0, "Both && and '' were used to separate this command from the previous one!", NULL);
-					C->errcond = 1;
-					return C;
-				}
-				C->argv[C->argc+1] = 0;
-				C->or_next = 1;
-				C->and_next = 0;
-				C->next = process_token_list(Argv + i, in, out, err);
-				return C;
-			}
-			else if (!strcmp(Argv[i], begblock)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				report_error(0, "No blocks yet, sorry", NULL);
-				C->errcond = 3;
-				return C;
-			}
-			else if (!strcmp(Argv[i], endblock)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-				i++;
-				report_error(0,"Missing begin block!", NULL);
-				C->errcond = 4;
-				
-				return C;
-			}
-		}
-		else { // normal string or special ($@, $*, $#, $?, $-, $$, $!, $0)
-			char **tmp = NULL; 
-
-//			DPTprintf("Assigning \"%s\" to C->argv[%d]\n", Argv[i], C->argc);
-			C->argv[C->argc++] = Argv[i];
-			C->argv[C->argc] = 0;
-			tmp = word_expansion(C->argv, &(C->argc), C->argc-1);
-			if (tmp) C->argv = tmp;
-		}
-
-//		DPTprintf("{Argv[%d] = \"%s\"  &  ", i, Argv[i]);
-//		DPTprintf("C->argv[%d] = \"%s\"  is_sexp() = %d //  ", 0, C->argv[0], is_sexp(C->argv[0]));
-//		DPTprintf("Argv[%d] = \"%s\" %p}\n", i+1, Argv[i+1], Argv[i+1]);
-
-		// if the first thing in the list is an s-expression and the *next thing in the list is an s-expression
-		if (is_sexp(C->argv[0]) && C->argc == 1 && (!Argv[i+1] || (Argv[i] && is_sexp(Argv[i+1])))) { 
-//			int k = 0;
-//			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && C->argv && *C->argv[0]) ? C->argv[0] : "(none)");
-			i++; // We *do not* increment here, because i already points to the right spot
-//			if (Argv[i] && *Argv[i]) {
-//				DPTprintf("%s:%d -- which will be followed by %s\n", __FUNCTION__, __LINE__, Argv[i]);
-//			}
-			
-//			for (k = 0; k < C->argc; k++) {
-//				DPTprintf("  [%d] %s\n", k, C->argv[k]);
-//			}
-
-			C->next = process_token_list(Argv + i, in, out, err);
-			return C;
-		}
-
-		if (0) {
-			int j = 0;
-			if (C->argc > 0) {
-				printf("command = %s", C->argv[0]);
-				for (j = 1; C->argv[j]; j++) printf(" %s", C->argv[j]);
-				printf("\n");
-			}
-		}
-	}
-
-	return C;
-}
-	
-/*--  char **process_command_in_token_list(int execute, int emit, char **Argv, int In, int Out,int Err, char **inputstring, char **outputstring)   */
-// inputstring and outputstring are used when we are dealing with s-expressions
-/*
-#warning ---------------------------------------------------------------
-#warning I need to convert bare scheme expressions to a fork and print that
-#warning we can use to pipe into other things or ... stuff.
-#warning ---------------------------------------------------------------
-*/
-
-#if defined(NOT_EVEN_CLOSE_TO_WORKING_YET)
-
-
-char **process_command_in_token_list(int *ret, int execute, int emit, char **Argv, int In, int Out,int Err, char **inputstring, char **outputstring) { 
-/*--- ISSUES: Passing back return values, managing the way Argv steps through the array of tokens across nested invocations
- */
-	int Argc = 0;
-
-	char **argv = NULL;
-	int argc = 0, run_scheme_expression = 0, errcond = 0;
-	int next = 0;
-
-	int in  = -1, out = -1, err = -1, bg = 0;
-	int i = 0;
-	cmd_t *C = new_cmd_t();
-	char *fname = NULL;
-
-	for (Argc = 0; Argv[Argc]; Argc++) {
-		//char *s = Argv[Argc];
-		//if (is_magic(s) || strchr("(),|&;<>{}", *s)) continue;
-
-		//DPTprintf("DPT Argv[%d] = \"%s\"\n",Argc, Argv[Argc]);
-	}
-
-	argv = (char **)calloc(Argc+1, sizeof(char **));
-
-	in = In;
-	out = Out;
-	err = Err;
-
-	
-/*---  loop over tokens in list till we hit the end of a command/s-expression   */
-
-	for (i = 0; Argv && i < Argc; i++) {
-		if (!Argv[i] || !Argv[i][0]) continue;
-
-/*----  We've hit a symbol or the beginning of a literal list....*/
-  if (is_magic(Argv[i])) {
-			if (0) {}
-			//else if (!strcmp("(,", *Argv[i])) { // Catch the scheme stuff early
-			//}
-
-/*----- handle a quoted list, send it to c_execute */
-  			else if (!strncmp(Argv[i], quotedlist, strlen(quotedlist)) || !strncmp(Argv[i], shellcmd, strlen(shellcmd))) {
-				int kq;
-			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", 
-					__FUNCTION__, 
-					__LINE__, 
-					Argv[i], 
-					(C && argv && *argv[0]) ? argv[0] : "(none)");
-
-				argv[argc++] = Argv[i];
-				argv[argc] = 0;
-				if (execute) kq = c_execute(1, 0, Argv, in, out, err, inputstring ? *inputstring : NULL);
-				else kq = 0;
-
-				STATUS(kq);
-			}
-
-/*----- heredoc -- not implemented */
-			else if (!strcmp(Argv[i], heredoc)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				report_error(0,"here documents not supported yet", NULL);
-				*ret = errcond = 255;
-				return Argv+i;
-			}
-
-/*----- open a file for standard out to append to */
-			else if (!strcmp(Argv[i], stdoutapp)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to append stdout to!", NULL);
-					*ret = errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					out = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (out < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-			}
-
-/*----- open a file for stderr to append to */
-			else if (!strcmp(Argv[i], stderrapp)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to append stderr to!", NULL);
-					*ret =  errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (err < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-			}
-
-/*----- open a file for both stdout and stderr to append to */
-			else if (!strcmp(Argv[i], stdouterrapp)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to append stdout and stderr to!", NULL);
-					*ret  = errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					out = err = open(fname, O_APPEND|O_CREAT|O_WRONLY, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (out < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-			}
-/*----- open a file to take stdin from */
-			else if (!strcmp(Argv[i], stdinredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to read as stdin!", NULL);
-
-					*ret = errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					in = open(fname, O_RDONLY);
-					if (in < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-				
-			}
-
-/*----- open a file to write stdout to */
-  
-			else if (!strcmp(Argv[i], stdoutredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to write stdout to!", NULL);
-					*ret = errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					if (access(fname,F_OK) == Ok) unlink(fname);
-					out = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (out < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-			}
-
-/*----- open a file to write stderr to */
-			else if (!strcmp(Argv[i], stderredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to write stderr to!", NULL);
-					*ret = errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					if (access(Argv[i], F_OK) == Ok) unlink(fname);
-					err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (err < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-			}
-
-/*----- open a file to write both stdout and stderr to */
-			else if (!strcmp(Argv[i], stdouterredir)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (i >= Argc) {
-					report_error(0,"No filename specified to write stderr to!", NULL);
-					*ret = errcond = 1;
-					return Argv+i;
-				}
-
-				fname = handle_filename(Argv[i]);
-				Free(Argv[i]);
-
-				//i++;
-				//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				if (fname && *fname) {
-					if (access(fname, F_OK) == Ok) unlink(fname);
-					out = err = open(fname, O_CREAT|O_WRONLY|O_TRUNC, (mode_t)(S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH));
-					if (out < 0) {
-						errcond = 1;
-						report_error(errno, "Unable to open file", fname);
-					}
-					free(fname);
-				}
-				else errcond = 1;
-			}
-
-			
-/********************  The following bits may execute commands ********************/
-/*----- we have a thing that is piping stdout to another thing */
-			else if (!strcmp(Argv[i], outpipe)) {
-				i++;
-				/*** NEED TO MAKE THIS WORK, NEED TO MAKE THE REMAINING TWO CASES WORK  ***/
-
-				if (0) {;}
-
-/*------ this s-expression is piping into another s-expression  */
-				else if (argv[0] && is_sexp(argv[0]) && is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-
-					if (execute) *outputstring = evaluate_scheme_expression(emit, argv[0], *inputstring);
-					if (inputstring && *inputstring) {Free(*inputstring); inputstring = NULL;} // consume input string
-
-					Argv = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-### HERE ###					Argc
-				}
-
-/*------ this program is piping into an s-expression  */
-				else if (argv[0] && !is_sexp(argv[0]) && is_sexp(Argv[i])) { 
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					report_error(0, "'cmd | (sexp)' is not working yet", NULL);
-
-					if (inputstring && *inputstring) {
-						if (in != In) {
-							// there is some error here!
-							errcond = 1;
-							report_error(255, "Huh? A program seemingly has a redirected input file as well as an input string:", inputstring);
-						}
-					}
-
-					if (execute) *outputstring = c_execute(0, , Argv, in, out, err, inputstring ? *inputstring : NULL);
-					if (inputstring && *inputstring) {Free(*inputstring); inputstring = NULL;} // consume input string
-
-					next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-
-					return errcond;
-				}
-/*------ this s-expression is piping into a program  */
-#if 0 // Seems to work without this....
-				else if (argv[0] && is_sexp(argv[0]) && !is_sexp(Argv[i])) { 
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					report_error(0, "'(sexp) | cmd' is not working yet", NULL);
-
-					next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-					return errcond;
-				}
-#endif
-/*------ this program is piping to another program  */
-				else {
-					int pipefd[2] = {-1, -1}; // you read from pipefd[0] and write to pipefd[1]
-					//DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-
-					if (i >= Argc) {
-						report_error(0, "Nothing specified to write stdout to!", NULL);
-						errcond = 1;
-						return errcond;
-					}
-					if (inputstring && *inputstring) {
-						if (in != In) {
-							// there is some error here!
-							errcond = 1;
-							report_error(255, "Huh? A program seemingly has a redirected input file as well as an input string:", inputstring);
-						}
-					}
-
-					argv[argc] = 0;
-					
-					pipe(pipefd);
-					out = pipefd[1];
-
-					errcond = c_execute(execute, 0, Argv, in, out, err, NULL);
-					STATUS(errcond);
-					
-					next = process_command_in_token_list(&ret, execute, emit, Argv + i, pipefd[0], out, err, outputstring, NULL);
-					return errcond;
-				}
-			}
-
-/*----- we have a thing that is piping stderr to another thing */
-			else if (!strcmp(Argv[i], errpipe)) {
-				i++;
-				if (argv[0] && is_sexp(argv[0]) && is_sexp(Argv[i])) { // both the command that we've been collecting and the next are s-exprs
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					fprintf(stderr,"\nBOINK\n");
-
-				}
-				else if (argv[0] && !is_sexp(argv[0]) && is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					fprintf(stderr,"\nBOINK\n");
-
-				}
-				else if (argv[0] && is_sexp(argv[0]) && !is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					fprintf(stderr,"\nBOINK\n");
-
-				}
-				else {
-					int pipefd[2] = {-1, -1}; // you read from pipefd[0] and write to pipefd[1]
-					DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-					if (i >= Argc) {
-						report_error(0, "Nothing specified to write stderr to!", NULL);
-						errcond = 1;
-						return errcond;
-					}
-					argv[argc] = 0;
-				
-					pipe(pipefd);
-
-					err = pipefd[1];
-					next = process_command_in_token_list(&ret, execute, emit, Argv + i, pipefd[0], out, err, outputstring, NULL);
-					return errcond;
-				}
-			}
-
-/*----- we have a thing that is piping both stdout and stderr to another thing */
-			else if (!strcmp(Argv[i], outerrpipe)) {
-				if (argv[0] && is_sexp(argv[0]) && is_sexp(Argv[i])) { // both the command that we've been collecting and the next are s-exprs
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					fprintf(stderr,"\nBOINK\n");
-				
-				}
-				else if (argv[0] && !is_sexp(argv[0]) && is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					fprintf(stderr,"\nBOINK\n");
-					
-				}
-				else if (argv[0] && is_sexp(argv[0]) && !is_sexp(Argv[i])) {
-					DPTprintf("%s:%d -- processing %s as a part of command: %s, piping into s-expression %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)", Argv[i]);
-					fprintf(stderr,"\nBOINK\n");
-					
-				}
-				else {
-					int pipefd[2] = {-1, -1}; // you read from pipefd[0] and write to pipefd[1]
-					DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-					i++;
-					if (i >= Argc) {
-						report_error(0,"Nothing specified to write stdout and stderr to!", NULL);
-						errcond = 1;
-						return errcond;
-					}
-					argv[argc] = 0;
-				
-					pipe(pipefd);
-
-					out = err = pipefd[1];
-					next = process_command_in_token_list(&ret, execute, emit, Argv + i, pipefd[0], out, err, outputstring, NULL);
-					return errcond;
-				}
-			}
-
-/*----- make the command run in the background */
-			else if (!strcmp(Argv[i], makebg)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				argv[argc+1] = 0;
-				bg = 1;
-				argv[argc] = 0;
-				//next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-				return errcond;
-			}
-
-/*----- Finished with the command, execute it begin processing the next one */
-			else if (!strcmp(Argv[i], nextsep)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				argv[argc+1] = 0;
-				next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-				return errcond;
-			}
-
-/*----- NEED A NEGATION FLAG FOR THE STATE OF THE COMMAND */
-
-/*----- Finished with the command, execute it, if this one failed set the execute flag to false, begin processing the next one  */
-			else if (!strcmp(Argv[i], andsep)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				if (or_next) {
-					report_error(0, "Both || and && were used to separate this command from the previous one!", NULL);
-					errcond = 1;
-					return errcond;
-				}
-				argv[argc+1] = 0;
-				and_next = 1;
-				next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-				return errcond;
-			}
-/*----- Finished with the command, execute it, if this one succeeded set the execute flag to false, begin processing the next one  */
-			else if (!strcmp(Argv[i], orsep)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				if (and_next) {
-					report_error(0, "Both && and '' were used to separate this command from the previous one!", NULL);
-					errcond = 1;
-					return errcond;
-				}
-				argv[argc+1] = 0;
-				or_next = 1;
-				and_next = 0;
-				next = process_command_in_token_list(&ret, execute, emit, Argv + i, in, out, err, outputstring, NULL);
-				return errcond;
-			}
-
-/*----- Start a command block */
-			else if (!strcmp(Argv[i], begblock)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				report_error(0, "No blocks yet, sorry", NULL);
-				errcond = 3;
-				return errcond;
-			}
-
-/*----- Finish a command block */
-			else if (!strcmp(Argv[i], endblock)) {
-				DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-				i++;
-				report_error(0,"Missing begin block!", NULL);
-				errcond = 4;
-				
-				return errcond;
-			}
-
-/********************  The preceding bits may execute commands ********************/
-
-		}
-		else {
-			char **tmp = NULL; 
-//			DPTprintf("Assigning \"%s\" to argv[%d]\n", Argv[i], argc);
-			argv[argc++] = Argv[i];
-			argv[argc] = 0;
-			tmp = word_expansion(argv, &(argc), argc-1);
-			if (tmp) argv = tmp;
-		}
-
-//		DPTprintf("{Argv[%d] = \"%s\"  &  ", i, Argv[i]);
-//		DPTprintf("argv[%d] = \"%s\"  is_sexp() = %d //  ", 0, argv[0], is_sexp(argv[0]));
-//		DPTprintf("Argv[%d] = \"%s\" %p}\n", i+1, Argv[i+1], Argv[i+1]);
-
-		// if the first thing in the list is an s-expression and the *next thing in the list is an s-expression
-		if (is_sexp(argv[0]) && argc == 1 && (!Argv[i+1] || (Argv[i] && is_sexp(Argv[i+1])))) { 
-			int k = 0;
-			DPTprintf("%s:%d -- processing %s as a part of command: %s\n", __FUNCTION__, __LINE__, Argv[i], (C && argv && *argv[0]) ? argv[0] : "(none)");
-			i++; // We *do not* increment here, because i already points to the right spot
-			if (Argv[i] && *Argv[i]) {
-				DPTprintf("%s:%d -- which will be followed by %s\n", __FUNCTION__, __LINE__, Argv[i]);
-			}
-			
-//			for (k = 0; k < argc; k++) {
-//				DPTprintf("  [%d] %s\n", k, argv[k]);
-//			}
-
-			// EXECUTE THE COMMAND IF THE FLAG PERMITS
-
-			return errcond;
-		}
-
-		if (0) {
-			int j = 0;
-			if (argc > 0) {
-				printf("command = %s", argv[0]);
-				for (j = 1; argv[j]; j++) printf(" %s", argv[j]);
-				printf("\n");
-			}
-		}
-	}
-
-	return errcond;
-}
-
-#endif
-
-#define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {	\
-				if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
-
-
-/*-- Execute a builtin function */
-
-sexp execute_builtin(cmd_t *command, Builtin *op, char **argv, int input, int output) {
-	char *inputstring = NULL;
-	sexp r = SEXP_FALSE;
-	sexp_gc_var2(oin, oout);
-
-	sexp_gc_preserve2(ctx, oin, oout);
-	sexp_preserve_object(ctx,r);
-
-
-
-	if (input > 2) {
-		oin = sexp_eval_string(ctx,"(current-input-port)", -1, ENV);
-//		adjust_fd(input, 0);
-//		sexp_eval_string(ctx,"(current-input-port (open-input-file-descriptor 0))", -1, ENV);
-	}
-	
-	if (output > 2) {
-		oout = sexp_eval_string(ctx,"(current-output-port)", -1, ENV);
-		adjust_fd(output, 1);
-		sexp_eval_string(ctx,"(current-output-port (open-output-file-descriptor 1))", -1, ENV);
-	}
-
-	if (input > 2) {
-		inputstring = read_all(input);
-		if (!inputstring) return SEXP_FALSE;
-	}
-
-	//DPTprintf("about to run %s\n", *argv);
-	r = (op->func)(command, argv, 0, 1, inputstring);
-
-	if (output > 2) close(output);
-
-	sexp_apply(ctx, sexp_eval_string(ctx,"current-input-port",-1,ENV), sexp_cons(ctx,oin, SEXP_NULL));
-	sexp_apply(ctx, sexp_eval_string(ctx,"current-output-port",-1,ENV), sexp_cons(ctx,oout, SEXP_NULL));
-
-	Free(inputstring);
-
-	sexp_gc_release3(ctx);
-	return r;
-}
-
-/*--- Non-functional scheme dispatch routine for commands */
-
-int scm_execute_single_process(int in_the_background, char *cmd, char **argv, int input, int output, int error) {
-//	int i, o, e;
-//	FILE *I, *O, *E;
-
-	sexp_gc_var2(exec_stuff,result);
-	sexp_gc_preserve2(ctx,exec_stuff,result);
-
-	exec_stuff = SEXP_NULL;
-	//exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,shute), exec_stuff);
-	//exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,shuto), exec_stuff);
-	exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,error), exec_stuff);
-	exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,output), exec_stuff);
-	exec_stuff = sexp_cons(ctx, sexp_make_integer(ctx,input), exec_stuff);
-	exec_stuff = sexp_cons(ctx, argv_to_list(ctx, argv, -1), exec_stuff);
-#if 1 // use cmd
-	exec_stuff = sexp_cons(ctx, sexp_c_string(ctx, cmd, -1), exec_stuff);
-#else // use *argv
-	exec_stuff = sexp_cons(ctx, sexp_c_string(ctx, *argv, -1), exec_stuff);
-#endif
-	if (in_the_background) exec_stuff = sexp_cons(ctx, SEXP_TRUE, exec_stuff);
-	else exec_stuff = sexp_cons(ctx, SEXP_FALSE, exec_stuff);
-
-#if 0
-	exec_stuff = sexp_cons(ctx, sexp_eval_string(ctx, "*igor-execute-single-process*", -1, env), exec_stuff);
-	sexp_eval(ctx,exec_stuff, env);
-#else
-	result = sexp_apply(ctx,sexp_eval_string(ctx, "*igor-execute-single-process*", -1, env), exec_stuff);
-#endif
-	//result = sexp_apply(ctx, igor_dispatch_exec, exec_stuff)
-
-	sexp_gc_release2(ctx);
-	
-	return -1;
-}
-
-/*--- bg/fg process control stuff -- not functional **/
-#if 1
-int process_index(pid_t pid) {
-	if (1 || n_procs < 16)  {
-		int i = -1;
-		for (i = 0; i < n_procs; i++) {
-			if (proclist[i].pid == pid) return i;
-		}
-		return -1;
-	}
-	else {
-		// use a binary search
-	}
-}
-
-void register_death(int ix, int exitval) {
-	abort();
-}
-
-void record_process(pid_t pid, int bg) {
-	abort();
-}
-
-void wait_for(int ix)
-{
-	int pstat = -1;
-
-	if (ix < 0 || ix >= n_procs) return;
-
-   for (;!waitpid(proclist[ix].pid, &pstat, WNOHANG);) {   // Loops till the child has been stopped or it has exited
-		if (0) {;}
-		else if (WIFEXITED(pstat)) { // normal exit  for proclist[ix]
-			int exitval =  WEXITSTATUS(pstat);
-			register_death(ix, exitval);
-		}
-		else if (WIFSIGNALED(pstat)) { // abnormal exit  for proclist[ix]
-			int sigval =  WTERMSIG(pstat);
-			fprintf(stderr,"\nProcess %d was killed by %d",proclist[ix].pid,sigval);
-#if  defined(WCOREDUMP)
-			if (WCOREDUMP(sigval)) fprintf(stderr," ... core dumped\n");
-			else  fprintf(stderr,"\n");
-#else
-			fprintf(stderr,"\n");
-#endif
-			register_death(ix,-sigval);
-		}
-		else if (WIFSTOPPED(pstat)) { // process has been stopped, just return
-			SET(proclist[ix].state, STOPPED);
-			return;
-		}
-		else if (WIFCONTINUED(pstat)) { // process has been signaled with SIGCONT
-			UNSET(proclist[ix].state, STOPPED);// clear the STOPPED bit
-		}
-	}
-}
-
-
-void move_proc_to_foreground(int ix) {
-	if (ix < 0 || ix >= n_procs) abort();
-	
-	UNSET(proclist[ix].state,BACKGROUNDED);
-	tcsetpgrp(igor_pgid, proclist[ix].pgid);  // let the child play with the powertools
-
-	if (kill(- proclist[ix].pgid, SIGCONT) < 0) report_error(errno,"Process unable to resume!", NULL);
-
-	wait_for(ix);  // wait till the child is finished
-
-	tcsetpgrp(0, igor_pgid); // pick up the circular saw and mop up the blood
-}
-
-void background_proc(int ix) {
-	if (ix < 0 || ix >= n_procs) abort();
-		  
-	SET(proclist[ix].state, BACKGROUNDED);
-		  // restore the terminal to the parent shell
-	tcsetpgrp(0, igor_pid);
-}
-
-void background_running_proc(int ix)
-{
-	if (ix < 0 || ix >= n_procs) abort();
-
-	SET(proclist[ix].state, BACKGROUNDED);
-	if (proclist[ix].state != BLOCKED) SET(proclist[ix].state, BLOCKED);
-	if (kill(-proclist[ix].pgid, SIGCONT) < 0) report_error(errno,"unable to raise SIGCONT", NULL);
-
-	tcsetpgrp(0, igor_pid);
-}
-#endif
-
-/*--- Signal handlers  */
-
-void catch_sigchld(int signum) {
-	int child_status = 0;
-	
-	waitpid(0, &child_status, WNOHANG);
-	// This basically just keeps the innards clear
-	return;
-}
-
-void catch_sigint(int signum) {
-	//int child_status = 0;
-	
-	//waitpid(0, &child_status, WNOHANG);
-	//// This basically just keeps the innards clear
-	return;
-}
-
-
-void catch_sigterm(int signum) {
-	//int child_status = 0;
-	
-	//waitpid(0, &child_status, WNOHANG);
-	//// This basically just keeps the innards clear
-	return;
-}
-
-
-void catch_sigquit(int signum) {
-	//int child_status = 0;
-	
-	//waitpid(0, &child_status, WNOHANG);
-	//// This basically just keeps the innards clear
-	return;
-}
-
-void signalhandler(int p) {
-	int exitval = -1;
-	pid_t pid = -1;
-	int ix = -1;
-
-	pid = waitpid(WAIT_ANY, &exitval, WUNTRACED | WNOHANG); // intercept the process that sends the signal
-
-	if (pid > 0) {                                                                          // if there are information about it
-		ix = process_index(pid);                      // get the job from the list
-		if (ix < 0)	return;
-
-		if (WIFSTOPPED(exitval)) { // SIGSTOP
-			if (!(proclist[ix].state & BACKGROUNDED)) { // we are suspending things
-				tcsetpgrp(0, proclist[ix].pgid);
-				SET(proclist[ix].state, STOPPED);
-			} 
-			else { // mark it as blocked
-				tcsetpgrp(0, igor_pgid);
-				SET(proclist[ix].state,BLOCKED);
-			}
-			return;
-		}
-		else if (WIFCONTINUED(exitval)) { // SIGCONT
-				if (proclist[ix].state & BACKGROUNDED) UNSET(proclist[ix].state, STOPPED);
-				
-			//else  jobsList = delJob(ix);
-		} 
-		else if (WIFSIGNALED(exitval)) { // killed
-			register_death(ix,exitval);
-		} 
-		else if (WIFEXITED(exitval)) { // Normal exit
-			if (proclist[ix].state & BACKGROUNDED) register_death(ix,exitval);
-			//else register_death(ix,exitval);
-		} 
-		else { // Something must have happened, just remove it from the array; we won't be able to do anything with it.
-			if (proclist[ix].state & BACKGROUNDED) register_death(ix,exitval);
-		}
-		tcsetpgrp(0, igor_pgid);
-	}
-}
-
-
-/*--- Execute a single command -- C dispatch function ... emits a string*/
-
-int c_emit_string_in_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) {
-	int procid = -1;
-	int cstate = 0;
-
-   #define ifewsxz if  // Westley, the Dread Pirate Rabbits added the "ewsxz".  
-	                    // If one can't have input into the C standard just because one
-                       // is a rabbit, then there is something dreadfully unfair....
-                       
-	ifewsxz (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
-
-	if (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
-	//time(&now);
-	procid = fork();
-
-	if (procid > 0) { // This is the parent
-		int cid = 0;
-
-		record_process(procid, in_the_background);
-
-		if (!in_the_background) {
-			cid = waitpid(procid, &cstate, 0);
-			//waitpid(procid, &cstate, 0);
-		}
-		else if (in_the_background) {
-			fprintf(stderr,"[started background process: %s]\n", cmd);
-		}
-
-		if (input > 2 && close(input) == -1) perror("cannot close stdin");
-		if (output > 2 && close(output) == -1) perror("cannot close stdout");
-
-		if (cid == -1 && errno != ECHILD) perror("wait error");
-
-		if (error > 2 && close(error) == -1) perror("cannot close stderr");
-
-		return 0;
-	}
-	else if (!procid) { // this is the child
-		int n = 0;
-		fflush(stderr);
-
-		adjust_fd(input,0);
-		adjust_fd(output,1);
-		adjust_fd(error,2);
-
-		Dprintf("Child (%s) about to exec\n",cmd);
-		signal(SIGINT, SIG_DFL);
-		signal(SIGQUIT, SIG_DFL);
-		signal(SIGTERM, SIG_DFL);
-		signal(SIGTSTP, SIG_DFL);
-		signal(SIGCHLD, &signalhandler);
-		signal(SIGTTIN, SIG_DFL);
-		
-
-		usleep(25000);
-		setpgrp();
-
-/*
-		if (executionMode == FOREGROUND)
-			tcsetpgrp(BDSH_TERMINAL, igor_pid);                                // if we want the process to be in foreground
-		if (executionMode == BACKGROUND)
-			printf("[%d] %d\n", ++numActiveJobs, (int) getpid());              // inform the user about the new job in bg
-*/
-
-
-		if (1) {
-			int i = 0;
-			for (i = 1; argv[i]; i++) {
-				if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
-					char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
-					if (ss) {
-						Free(argv[i]);
-						argv[i] = ss;
-					}
-				}
-			}
-		}
-
-		begin {
-			char *tcmd = completed_path(cmd);
-			//char *tcmd = strdup(cmd);
-			//if (tcmd) fprintf(stderr,"%s (%d)\n", tcmd, access(tcmd, X_OK));
-
-			if (tcmd && access(tcmd, X_OK) == Ok) {
-				int q = 0;
-				
-				for (q = 0; track_execv && argv && argv[q]; q++) {
-					if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
-					fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
-				}
-
-				if ((n = execv(tcmd, argv)) == -1) {
-		            //time(&then);
-					report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
-				}
-				else {
-					//fprintf(stderr,"Goodo.\n");
-			         //time(&then);
-			         //proc_finished(procid, then);
-				}
-				free_null_terminated_pointer_array(argv);
-				Free(tcmd);
-
-				close_up_shop();
-				exit(n); // if the process doesn't go, we need to dispatch it
-			}
-			else {
-				report_error(0,"Unable to execute program", argv[0]);
-				if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
-				else {
-					if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
-					else report_error(0,"The file was not found", cmd);
-				}
-				free_null_terminated_pointer_array(argv);
-				Free(tcmd);
-
-				close_up_shop();
-				exit(ENOENT);
-			}
-		}
-	}
-			
-	else {
-		report_error(errno, "Failed to fork", NULL);
-//		sexp_destroy_context(ctx);
-		return -1;
-	}
-}
-
-
-/*--- Execute a command -- C dispatch function */
-
-
-int c_execute(int run_scheme_expression, int in_the_background, char **argv, int input, int output, int error, char *inputstring) {
-	int procid = -1;
-	char *cmd = *argv;
-	char *returnstr = NULL;
-
-#if 0
-	char **ss = NULL;
-	fprintf(stderr,"EXECUTING %s [", cmd);
-	for (ss = argv; *ss; ss++) {
-		if (ss == argv) fprintf(stderr,"%s", *ss);
-		else  fprintf(stderr,", %s", *ss);
-	}
-	fprintf(stderr,"] ");
-	
-	fprintf(stderr,"<%d,%d> &%d", input, output, error);
-	fprintf(stderr, " %s\n", (in_the_background ? "&" : ""));
-#endif
-
-	ENTRY("",NULL);
-
-   #define ifewsxz if  // Westley, the Dread Pirate Rabbits added the "ewsxz".  
-	                    // If one can't have input into the C standard just because one
-                       // is a rabbit, then there is something dreadfully unfair....
-                       
-	ifewsxz (!cmd) return 0; // it's ok to try and run an empty process ... it just doesn't do anything
-
-
-	if (run_scheme_expression) {
-		TRACK;
-		returnstr = dispatch_scheme(argv);
-	}
-	else {
-		TRACK;
-
-		procid = fork();
-
-		if (procid > 0) { // This is the parent
-			int cid = 0;
-			int cstate= -1;
-
-			
-			if (!in_the_background) {
-				TRACK;
-				cid = waitpid(procid, &cstate, 0);
-				TRACK;
-			}
-			else if (in_the_background) {
-				char *bgpid;
-				TRACK;
-				asprintf(&bgpid,"%d",procid);
-				if (bgpid) {
-					igor_set(ctx,"$!", bgpid);
-					Free(bgpid);
-				}
-			
-				fprintf(stderr,"[started background process: %s]\n", cmd);
-				TRACK;
-			}
-			TRACK;
-
-			if (input > 2 && close(input) == -1) perror("cannot close stdin");
-			if (output > 2 && close(output) == -1) perror("cannot close stdout");
-
-			if (cid == -1 && errno != ECHILD) perror("wait error");
-
-			if (error > 2 && close(error) == -1) perror("cannot close stderr");
-
-			LEAVING("",NULL);
-			return cstate;
-		}
-		else if (!procid) { // this is the child
-			int n = 0;
-			fflush(stderr);
-
-			adjust_fd(input,0);
-			adjust_fd(output,1);
-			adjust_fd(error,2);
-
-			Dprintf("Child (%s) about to exec\n",cmd);
-			signal(SIGINT, SIG_DFL);
-			signal(SIGQUIT, SIG_DFL);
-			signal(SIGTERM, SIG_DFL);
-			signal(SIGTSTP, SIG_DFL);
-			signal(SIGCHLD, &signalhandler);
-			signal(SIGTTIN, SIG_DFL);
-		
-			if (!run_scheme_expression) {
-				if (1) {
-					int i = 0;
-					for (i = 1; argv[i]; i++) {
-						if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
-							char *ss = evaluate_scheme_expression(1, argv[i], NULL);  // These get cleaned up when the argv[] are freed
-							if (ss) {
-								Free(argv[i]);
-								argv[i] = ss;
-							}
-						}
-					}
-				}
-
-				begin {
-					char *tcmd = completed_path(cmd);
-			//char *tcmd = strdup(cmd);
-			//if (tcmd) fprintf(stderr,"%s (%d)\n", tcmd, access(tcmd, X_OK));
-
-					if (tcmd && access(tcmd, X_OK) == Ok) {
-						int q = 0;
-				
-						for (q = 0; track_execv && argv && argv[q]; q++) {
-							if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
-							fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
-						}
-
-						if ((n = execv(tcmd, argv)) == -1) {
-		            //time(&then);
-							report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
-						}
-						else {
-					//fprintf(stderr,"Goodo.\n");
-			         //time(&then);
-			         //proc_finished(procid, then);
-						}
-						free_null_terminated_pointer_array(argv);
-						Free(tcmd);
-
-						close_up_shop();
-						exit(n); // if the process doesn't go, we need to dispatch it
-					}
-					else {
-						report_error(0,"Unable to execute program", argv[0]);
-						if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
-						else {
-							if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
-							else report_error(0,"The file was not found", cmd);
-						}
-						free_null_terminated_pointer_array(argv);
-						Free(tcmd);
-
-						close_up_shop();
-						exit(ENOENT);
-					}
-				}
-			}
-			else {
-
-				if (returnstr){
-					write(output, returnstr, strlen(returnstr));
-					write(output, "\n", 1);
-				}
-				free_null_terminated_pointer_array(argv);
-				close_up_shop();
-				exit(0);
-			}
-		}	
-		else {
-			report_error(errno, "Failed to fork", NULL);
-//		sexp_destroy_context(ctx);
-			return -1;
-		}
-	}
-	LEAVING("",NULL);
-	return 0;
-}
-
-
-/*--- Execute a single command -- C dispatch function */
-
-
-//int c_execute_single_process(int in_the_background, char *cmd, char **argv, char *inputstring, int input, int output, int error) 
-int c_execute_single_process(cmd_t *command) {
-	return c_execute(command->run_scheme_expression, command->bg, command->argv, command->in, command->out, command->err, command->inputstring);
-}
-
-
-
-/*--- Dispatch a scheme command */
-
-char *dispatch_scheme(char **argv) {// argv must be a null terminated array
-	// iterate through the argv[i] and execute them in order, capturing the output and appendiing it to the string which will be returned.
-	int i = 0;
-	char *returns = NULL;
-	
-
-	for  (i = 0; argv && argv[i]; i++) {
-		char *component = evaluate_scheme_expression(1, argv[i], NULL);
-		if (!returns) {
-			returns = component;
-		}
-		else if (component) {
-			returns = (char *)realloc(returns, strlen(returns) + strlen(component) + 2);
-			strcat(returns, " ");
-			strcat(returns, component);
-			Free(component);
-		}
-		else Free(component);
-	}
-	return returns;		
-}
-
-char *dispatch_scheme_stuff(cmd_t *command) {
-	// iterate through the argv[i] and execute them in order, capturing the output and appendiing it to the string which will be returned.
-	int i = 0;
-	char *returns = NULL;
-	
-	//int procid = -1;
-	//char *ss = NULL;
-	//char *cmd = *command->argv;
-	//int in_the_background = command->bg;
-	//char **argv = command->argv;
-	//char *inputstring = command->inputstring;
-	//int input = command->in;
-	//int output = command->out;
-	//int error = command->err;
-
-
-
-	//fprintf(stderr,"In dispatch_scheme_stuff: %s\n",command->argv[0]);
-
-/*
-  if (command->input != 0) {
-  instring = read-all-input;
-  Close(input);
-  }
-*/
-
-	for  (i = 0; i < command->argc; i++) {
-		char *component = evaluate_scheme_expression(1, command->argv[i], NULL);
-		if (!returns) {
-			returns = component;
-		}
-		else if (component) {
-			returns = (char *)realloc(returns, strlen(returns) + strlen(component) + 2);
-			strcat(returns, " ");
-			strcat(returns, component);
-			Free(component);
-		}
-		else Free(component);
-	}
-	return returns;		
-}
-
-		
-
-/*--- Run a chain of commands -- doesn't support && ||  */
-
-sexp run_commands(cmd_t *cmd) {
-	//static sexp inp = SEXP_FALSE, outp = SEXP_FALSE, errp = SEXP_FALSE;
-	int n = 0;
-	sexp sn = SEXP_TRUE; // This function takes s-expressions that are constant, or referenced elsewhere and passes them back up the chain
-	//int pass_numbers = 1;
-
-	char *dp = NULL;
-	char *lp = NULL;
-
-	for (;n == 0 && cmd;cmd=cmd->next) {
-		Builtin *op = NULL;
-
-//		printf("%s is a program ==== %d\n", cmd->argv[0], isa_program(cmd->argv[0]));
-//		printf("%s is a file ======= %d\n", cmd->argv[0], isa_dir(cmd->argv[0]));
-//		printf("%s is a suid prog == %d\n", cmd->argv[0], isa_suidfile(cmd->argv[0]));
-//		printf("%s is a sgid prog == %d\n", cmd->argv[0], isa_sgidfile(cmd->argv[0]));
-
-		if (!cmd->argv[0] || !cmd->argv[0][0]) continue;
-
-		strtod(cmd->argv[0], &dp);
-		strtol(cmd->argv[0], &lp, 10);
-
-#define dispatch_path
-		
-		// So what I need to do here is set up the current-*-ports for indicated scheme expressions (the underlying fds ought to be ok)
-
-/*****  Set the run_scheme_expression flag  appropriately  *****/ 
-		if (0);
-		else if (is_sexp(cmd->argv[0]) || (strchr("$'", cmd->argv[0][0]) && cmd->argv[0][1] == '('))  {
-#if defined(dispatch_path)
-			cmd->run_scheme_expression = 1;
-			op  = NULL;
-#else
-			op = member("scm", builtins);
-#endif
-			Dprintf("Scheme function: %s\n", cmd->argv[0]);
-		}
-		else if (is_sexp(cmd->argv[0]) || (cmd->argv[0][0] == '\'' && cmd->argv[0][1] == '('))  {
-#if defined(dispatch_path)
-			cmd->run_scheme_expression = 1;
-			op  = NULL;
-#else
-			op = member("scm", builtins);
-#endif
-			Dprintf("Scheme function: %s\n", cmd->argv[0]);
-		}
-		else {
-			op = member(*cmd->argv, builtins);
-			Dprintf("Builtin function: %s\n", cmd->argv[0]);
-		}
-/*****  Now run the command  *****/
-
-
-		char *tcmd = completed_path(cmd->argv[0]);
-
-		if (!op && ((tcmd && isa_program(tcmd)) || cmd->run_scheme_expression)) {
-			if (!cmd->cmd) cmd->cmd = string_array_as_string(cmd->argc, cmd->argv);
-			Free(tcmd);
-
-			run_command_prologue(cmd->cmd);
-			n = c_execute_single_process(cmd);
-			STATUS(n);
-			run_command_epilogue(cmd->cmd, sexp_make_integer(ctx,n));
-			
-			if (!n) sn = SEXP_TRUE; // unix commands return 0 on success, we map this to "true"
-			else {
-				sexp tn;
-				sexp_preserve_object(ctx,tn);
-				sn = tn = sexp_make_integer(ctx,n);
-			}
-		}
-#if !defined(dispatch_path)
-		else if (cmd->run_scheme_expression) { // This is a scheme expression or set of expressions to be run in a separate 
-			if (tcmd) Free(tcmd);
-			if (!cmd->cmd) cmd->cmd = string_array_as_string(cmd->argc, cmd->argv);
-			
-			begin {
-				char *s = NULL;
-				
-				printf("Scheme expression: %s ...\n", cmd->argv[0]);
-				run_command_prologue(cmd->cmd);
-				s = dispatch_scheme_stuff(cmd);
-				run_command_epilogue(cmd->cmd, sexp_make_string(ctx,s,-1));
-				printf("  ==> %s\n",s);
-				Free(s);
-			}
-		}
-#endif
-
-
-#if defined(ALLOW_NUMBERS_AS_NUMBERS) // Not really useful
-		else if (pass_numbers && *cmd->argv[0] && (!*dp || !*lp) && !isa_program(tcmd)) { // it is a number of some sort, but not an executable file name
-			if (tcmd) Free(tcmd);
-
-			printf("NUMBER: %s\n", cmd->argv[0]);
-		}
-#endif
-		else if (op) {
-			if (tcmd) Free(tcmd);
-
-			sn = execute_builtin(cmd, op, cmd->argv, cmd->in, cmd->out);
-			return sn;
-		}
-		else if ((n = scm_execute_single_process(cmd->bg, *cmd->argv, cmd->argv, cmd->in, cmd->out, cmd->err)) >= 0) {
-			// fine;
-			if (tcmd) Free(tcmd);
-
-			if (!n) sn = SEXP_TRUE; // unix commands return 0 on success, we map this to "true"
-			else {
-				sexp tn = SEXP_FALSE;
-				sexp_preserve_object(ctx,tn);
-				sn = tn = sexp_make_integer(ctx,n);
-			}
-		}
-		else {
-			report_error(0,"You cannot run that, is it really a program or command?", cmd->argv[0]);
-		}
-
-		if (cmd->shuto) Close(cmd->out);
-		if (cmd->shute) Close(cmd->err);
-		cmd->shuto = cmd->shute = 0;
-		cmd->out = cmd->err = -1;
-		
-
-		/*
-		  if (command was piping into something) {
-		  close the previous input port
-		  }
-		*/
-
-		Free(tcmd);
-	}
-
-	return sn;
-}
-
-
-/*--- run_recursive_descent routines */
+/*----- char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by the end of the s-expression  */
 
 char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by the end of the s-expression
 	// Treat a set of s-expressions as a single group (so we only emit on the last)
 	char **c = NULL;
 
 	if (!argv || !*argv) return argv;
+	ENTRY("");
 
 	c = (char **)calloc(2, sizeof(char  *));
 	*c = *argv;
@@ -4723,6 +3713,8 @@ char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by t
 	
 	return argv+1;
 }
+
+/*----- char **simple_exec_command(char **argv, sexp *rv, int excmd) { // terminated  by ";" "&&" "||" "&", or "}" (there should be no matching "${")  */
 
 char **simple_exec_command(char **argv, sexp *rv, int excmd) { // terminated  by ";" "&&" "||" "&", or "}" (there should be no matching "${")
 	char **a = NULL, **c = NULL;
@@ -4737,7 +3729,7 @@ char **simple_exec_command(char **argv, sexp *rv, int excmd) { // terminated  by
 	N = a-argv;
 
 	if (excmd) {
-		c = duplicate_null_terminated_string_array(argv);
+		c = duplicate_string_array(argv);
 		*rv = execute_command_array(c);
 	}
 	
@@ -4749,6 +3741,8 @@ char **simple_exec_command(char **argv, sexp *rv, int excmd) { // terminated  by
 
 // ****!! runs the same program over and over forever!
 
+
+/*----- char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err, int force_bg) {  */
 
 char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err, int force_bg) {
 	int done = 0;
@@ -4768,13 +3762,13 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 	if (!argv) return NULL;
 	// N is the number of non-null args, the number of elements is actually N+1
 
-	if (force_bg) make_background = 1;
+	if (force_bg) make_background = BACKGROUND;
 	
 	if (in >= 0) infd = in;
 	if (out >= 0) outfd = out;
 	if (err >= 0) errfd = err;
 	
-	ENTRY("", NULL);
+	ENTRY("");
 
 	for (i = 0; !done && argv && *argv; i++) {
 		TRACK;
@@ -4809,7 +3803,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Input is already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4817,7 +3811,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing filename for redirection in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				infn = handle_filename(argv[1]);
@@ -4834,7 +3828,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Output and Error are already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4842,7 +3836,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing filename for redirection in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				outfn = errfn = handle_filename(argv[1]);
@@ -4864,7 +3858,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Output is already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4872,7 +3866,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing filename for redirection in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				outfn = handle_filename(argv[1]);
@@ -4894,7 +3888,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Error output is already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4902,7 +3896,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing filename for redirection in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				errfn = handle_filename(argv[1]);
@@ -4924,7 +3918,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Output is already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4932,7 +3926,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing command for pipe in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				make_outpipe = 1;
@@ -4949,7 +3943,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Error output is already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4957,7 +3951,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing command for pipe in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				make_errpipe = 1;
@@ -4974,7 +3968,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Output or Error is already redirected in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				if (!argv[1]) {
@@ -4982,7 +3976,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					fprintf(stderr,"Missing command for pipe in '");
 					fprintf_string_array(stderr,-1,av);
 					fprintf(stderr,"'\n");
-					LEAVING("",NULL);
+					DEPARTURE("");
 					return NULL;
 				}
 				make_outpipe = make_errpipe = 1;
@@ -4992,7 +3986,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 			}
 			else if (*argv == makebg || !strcmp(*argv, makebg)) {
 				TRACK;
-				make_background = 1;
+				make_background = BACKGROUND;
 				argv++;
 				continue;
 			}
@@ -5008,7 +4002,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 			TRACK;
 
 			if (excmd) {
-				r = c_execute(0,make_background,cmd, in, out, err, NULL);
+				r = cs_execute(make_background,cmd, in, out, err, NULL);
 				STATUS(r);
 			}
 
@@ -5019,7 +4013,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 				*rv = SEXP_TRUE;
 			}
 
-			gronk(rv,excmd);
+			print_rv(rv,excmd);
 
 			delete_string_array(cmd);
 			cmd = NULL;
@@ -5028,11 +4022,11 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 		}
 			
 /*
-		so if we are piping, we call linear_chain *here* rather than unrolling with a return;
-		if it is a nextsep or other terminator, we just return and let the previous routines continue;
-		everything from here is likely to need extensive ... *adjustment*;
+  so if we are piping, we call linear_chain *here* rather than unrolling with a return;
+  if it is a nextsep or other terminator, we just return and let the previous routines continue;
+  everything from here is likely to need extensive ... *adjustment*;
 
-		mind the makebg flag....
+  mind the makebg flag....
 
 */
 		// these things mark the end of a command
@@ -5070,7 +4064,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 					// This is the program being piped into
 				
 					if (excmd) {
-						r = c_execute(0,make_background,cmd, in, out, err, NULL);
+						r = cs_execute(make_background,cmd, in, out, err, NULL);
 						argv = simple_command(argv, &qv, excmd, in, out, err, 0);
 					}
 
@@ -5124,7 +4118,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 		fprintf_string_array(stderr,-1,cmd);
 		fprintf(stderr,"\n");
 #endif			
-		if (excmd) i = c_execute(0,make_background,cmd, in, out, err, NULL);
+		if (excmd) i = cs_execute(make_background,cmd, in, out, err, NULL);
 		STATUS(i);
 
 		if (i) { // non-zero 
@@ -5138,22 +4132,23 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 	delete_string_array(cmd);
 	cmd = NULL;
 
-	LEAVING("", NULL);
+	DEPARTURE("", NULL);
 	return argv; // j handles the file redirection bits
 }
 
 
+/*----- char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {  */
 /*
-linear-chain ---> returns the last exit value, continues till end of chain if possible
+  linear-chain ---> returns the last exit value, continues till end of chain if possible
 
-   __ linear-chain _______________________________________________________
-                        \ __ ; _________ linear-chain __/
+  __ linear-chain _______________________________________________________
+  \ __ ; _________ linear-chain __/
 								 
 */
 
 char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 	int oin = in, oout = out, oerr = err;
-	ENTRY("",NULL);
+	ENTRY("");
 	static int LIMIT = 20;
 	if (LIMIT < 0) exit(0);
 	else LIMIT--;
@@ -5166,7 +4161,7 @@ char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) 
 			if (*argv == nextsep || !strcmp(*argv, nextsep)) {
 				TRACK;
 				argv++; // consume ;
-				gronk(rv,excmd);
+				print_rv(rv,excmd);
 				argv = linear_chain(argv, rv, excmd, in, out, err);
 			}
 			else if (*argv == andsep || *argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, andsep)  || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
@@ -5174,25 +4169,26 @@ char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) 
 			}
 		}
 		//if (rv && excmd && *rv != SEXP_TRUE) excmd = 0;
-		gronk(rv,excmd);
+		print_rv(rv,excmd);
 	}
 
-	LEAVING("", NULL);
+	DEPARTURE("", NULL);
 	return argv;
 }
 
 
+/*----- char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {  */
 /*
-and-chain ---> returns the last exit value, stops on failure
+  and-chain ---> returns the last exit value, stops on failure
 
-   __ simple-chain _______________________________________________________
-                        \ __ && __ and-chain __/
+  __ simple-chain _______________________________________________________
+  \ __ && __ and-chain __/
 */
 
 char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 	int done = 0;
 	
-	ENTRY("",NULL);
+	ENTRY("");
 	while (!done && argv && argv[0] ) {
 		TRACK;
 		if (argv && argv[0]) argv = linear_chain(argv, rv, excmd, in, out, err);
@@ -5204,10 +4200,10 @@ char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 		
 				if (*rv != SEXP_TRUE) excmd = 0;
 		
-				gronk(rv,excmd);
+				print_rv(rv,excmd);
 				argv = linear_chain(argv, rv, excmd, in, out, err);
 				if (*rv == SEXP_FALSE) excmd = 0;
-				gronk(rv,excmd);
+				print_rv(rv,excmd);
 			}
 			else if (*argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
@@ -5215,65 +4211,65 @@ char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 			}
 		}
 		if (rv && excmd &&  *rv == SEXP_FALSE) excmd = 0;
-		gronk(rv,excmd);
+		print_rv(rv,excmd);
 	}
 
-	LEAVING("",NULL);
+	DEPARTURE("");
 	return argv;
 }
 
 
+/*----- char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {  */
 /*
-or-chain  ---> returns the last exit value, stops on success
+  or-chain  ---> returns the last exit value, stops on success
 
   ___ and-chain  _________________________________________________________
-                    \ __ || __ or-chain__/
+  \ __ || __ or-chain__/
 */
 
 char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 	int done = 0;
-	ENTRY("",NULL)
-	while (!done && argv && *argv) {
-		TRACK;
-		if (argv && *argv) argv = and_chain(argv, rv, excmd, in, out, err);
+	ENTRY("")
+		while (!done && argv && *argv) {
+			TRACK;
+			if (argv && *argv) argv = and_chain(argv, rv, excmd, in, out, err);
 
-		if (argv && *argv) {
-			if (*argv == orsep || !strcmp(*argv, orsep)) {
-				TRACK;
-				argv++; // consume ||
+			if (argv && *argv) {
+				if (*argv == orsep || !strcmp(*argv, orsep)) {
+					TRACK;
+					argv++; // consume ||
 
-				if (*rv == SEXP_TRUE) excmd = 0;
-				gronk(rv,excmd);
+					if (*rv == SEXP_TRUE) excmd = 0;
+					print_rv(rv,excmd);
 
 
-				argv = and_chain(argv, rv, excmd, in, out, err);
+					argv = and_chain(argv, rv, excmd, in, out, err);
 
-				if (*rv == SEXP_TRUE) excmd = 0;
-				gronk(rv,excmd);
+					if (*rv == SEXP_TRUE) excmd = 0;
+					print_rv(rv,excmd);
+				}
+				else if (*argv == begblock || *argv == endblock || !strcmp(*argv,begblock) || !strcmp(*argv,endblock)) {
+					TRACK;
+					done = 1;
+				}
 			}
-			else if (*argv == begblock || *argv == endblock || !strcmp(*argv,begblock) || !strcmp(*argv,endblock)) {
-				TRACK;
-				done = 1;
-			}
+			if (rv && excmd && *rv != SEXP_TRUE) excmd = 0;
+			print_rv(rv,excmd);
+
 		}
-		if (rv && excmd && *rv != SEXP_TRUE) excmd = 0;
-		gronk(rv,excmd);
 
-	}
-
-	LEAVING("",NULL);
+	DEPARTURE("");
 	return argv;
 }
 
 
 
-
-
+/*----- char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err) {   */
 /*
-command-block --> returns whatever comes out
+  command-block --> returns whatever comes out
 
   ___ or-chain ___________________________________________________________
-    \__ { _______ command-block _______ } _________________________/
+  \__ { _______ command-block _______ } _________________________/
 
 
 */
@@ -5281,12 +4277,12 @@ command-block --> returns whatever comes out
 char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err) { 
 //	char **av = argv;
 
-	ENTRY("",NULL);
+	ENTRY("");
 	if (!argv || !*argv) return NULL;
 
 	if (strcmp(*argv, begblock)) {
 		TRACK;	
-	if (rv) argv = or_chain(argv, rv, excmd, in, out, err);
+		if (rv) argv = or_chain(argv, rv, excmd, in, out, err);
 		else argv = or_chain(argv, NULL, excmd, in, out, err);
 	}
 	else {
@@ -5302,12 +4298,12 @@ char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err)
 		}
 		else argv++; // consume final delimiter
 	}
-	LEAVING("",NULL);
+	DEPARTURE("");
 	return argv;
 }
 
 
-/*--- Routines that have the potential to support *amazing* customisation ... if they work */
+/*---- Routines that have the potential to support *amazing* customisation ... if they work */
 
 void run_command_prologue(char *cmds) {
 	sexp_gc_var2(prologue, str);
@@ -5342,8 +4338,10 @@ void update_internal_c_variables() {
 }
 
 
-/*- Command loop */
+/*--- Command loop plus initialisation routines*/
 	
+/*---- void command_loop(FILE *f) [recursive descent version]   */
+
 #if defined(RECURSIVE_DESCENT)
 void command_loop(FILE *f) {
 	char *cmd = NULL;
@@ -5399,6 +4397,8 @@ void command_loop(FILE *f) {
 			a = argv;
 			for (N = 0; argv && argv[N]; N++);
 
+			fprintf(stderr,"#if() command_loop: %s\n", cmd);
+
 #if 0
 			for (i = 0; i <= N; i++) {
 				if (a[i]) printf("%p %p %p %d) %s\n", a, a+i, a[i],i, a[i]);
@@ -5428,13 +4428,15 @@ void command_loop(FILE *f) {
 	}
 }
 
+/*---- void command_loop(FILE *f) [This version does not use the recursive descent routines]  */
+
 #else
 void command_loop(FILE *f) {
 	char *cmd = NULL;
-	cmd_t *C = NULL;
 	char **argv  = NULL;
 	int i = 0;
 	int line_num = 0;
+	sexp rv = SEXP_TRUE;
 
 	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
@@ -5445,6 +4447,8 @@ void command_loop(FILE *f) {
 			continue;
 		}
 		line_num++;
+
+		fprintf(stderr,"#else command_loop: %s\n", cmd);
 
 		Cprintf("about to run the command [%s]\n", cmd);
 		umask((mode_t)(S_IWGRP|S_IWOTH));
@@ -5465,17 +4469,21 @@ void command_loop(FILE *f) {
 				Dprintf("** argv[%d] = %s\n",i, argv[i]);
 			}
 
-			C = process_token_list(argv,0,1,2);
+//			C = process_token_list(argv,0,1,2);
 
 			//write(1,C->argv[0], strlen(C->argv[0]));
 			//write(1,"\n",1);
 
+#if 0
 			if (!C) printf("NO C -- I don't think this ought to happen.\n");
 			else run_commands(C);
 
 			if (C) free_cmd(C);
 			C = NULL;
-				//if (argv) free_null_terminated_pointer_array(argv);
+#else
+			command_block(argv, &rv, 1, -1, -1, -1);
+#endif
+				//if (argv) delete_string_array(argv);
 			Free(argv);
 			argv = NULL;
 		}
@@ -5485,6 +4493,8 @@ void command_loop(FILE *f) {
 }
 #endif
 
+
+/*---- sexp run_source_file(char *filename) {  */
 
 sexp run_source_file(char *filename) {
 	FILE *f = NULL;
@@ -5514,6 +4524,8 @@ sexp run_source_file(char *filename) {
 	return SEXP_TRUE;
 }
 
+
+/*---- sexp load_igor_rc(char *urc) {  */
 
 sexp load_igor_rc(char *urc) {
 	static char *igoretcrc = IGOR_SYS_RC_FILE;
@@ -5560,9 +4572,11 @@ sexp load_igor_rc(char *urc) {
 	return rtn;
 }
 
+#if KILLBUILTINS
 
-/*-------   Builtins   -------------------------------*/
+/*--- Builtins */
 
+/*---- sexp exit_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {  */
 
 sexp exit_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	int i = 0;
@@ -5586,6 +4600,8 @@ sexp exit_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	}
 	return SEXP_FALSE;
 }
+
+/*---- sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {  */
 
 sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	Cprintf("set_func\n");
@@ -5612,7 +4628,7 @@ sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 			asprintf(&cmd, "(define %s \"%s\")", argv[1], argv[2]);
 			if (cmd) ts = evaluate_scheme_expression(1, cmd, NULL);
 			Free(ts)
-			Free(cmd);
+				Free(cmd);
 		}
 		else {
 			char *ts = NULL;
@@ -5620,7 +4636,7 @@ sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 			asprintf(&cmd, "(define %s '())", argv[1]);
 			if (cmd) ts = evaluate_scheme_expression(1, cmd, NULL);
 			Free(ts)
-			Free(cmd);
+				Free(cmd);
 		}
 	}
 	else {
@@ -5630,6 +4646,8 @@ sexp set_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	}
 	return SEXP_TRUE;
 }
+
+/*---- sexp repl_output(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {  */
 
 sexp repl_output(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	char *value = argv[1];
@@ -5647,6 +4665,8 @@ sexp repl_output(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	return sexp_make_integer(ctx,repl_write);
 }
 
+
+/*---- sexp unset_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {  */
 
 sexp unset_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	int i = 0;
@@ -5666,6 +4686,8 @@ sexp unset_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	return SEXP_TRUE;
 }
 
+/*---- sexp exec_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {  */
+
 sexp exec_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	Cprintf("exec_func\n");
 
@@ -5678,6 +4700,8 @@ sexp exec_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	}
 	return SEXP_FALSE;
 }
+
+/*---- sexp cd_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {  */
 
 sexp cd_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	/*** change this so it can be replaced by a scheme routine ***/
@@ -5740,8 +4764,10 @@ sexp cd_func(cmd_t *cmnd, char **argv, int in, int out, char *inputstring) {
 	return SEXP_TRUE;
 }
 
-// Process a "sourced" file
-sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
+
+/*---- sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) -- Process a "sourced" file  */
+
+sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {  
 	int i = 0;
 
 	for (i = 1; argv[i]; i++) {
@@ -5767,6 +4793,8 @@ sexp source_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 
 
 
+
+/*---- sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {  */
 
 sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	// Need to collect *all* the arguments  and process them as input....
@@ -5872,24 +4900,13 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 	sexp_gc_release3(ctx);
 	return SEXP_TRUE;
 }
+#endif
 
-/*- system initialisation and shutdown */
 
-void install_builtins() {
-	builtins = insert_builtin(builtins, "exec", exec_func);
-	builtins = insert_builtin(builtins, "source", source_func);
-	builtins = insert_builtin(builtins, ".", source_func); // alias
-	builtins = insert_builtin(builtins, "repl_output", repl_output);
-	builtins = insert_builtin(builtins, "scm", scm_func);
-	builtins = insert_builtin(builtins, "exit", exit_func);
-	builtins = insert_builtin(builtins, "cd", cd_func);
-	builtins = insert_builtin(builtins, "set", set_func);
-	builtins = insert_builtin(builtins, "setenv", set_func); // alias
-	builtins = insert_builtin(builtins, "set!", set_func);   // alias
-	builtins = insert_builtin(builtins, "unset", unset_func);
-	builtins = insert_builtin(builtins, "unsetenv", unset_func); // alias
-	builtins = insert_builtin(builtins, "unset!", unset_func);   // alias
-}
+
+/*--- system initialisation and shutdown */
+
+/*---- int exit_value(sexp rtnv, int but_continue) {  */
 
 int exit_value(sexp rtnv, int but_continue) {
 	if (sexp_equalp(ctx,rtnv,SEXP_TRUE) && !but_continue) exit(0);
@@ -5897,14 +4914,14 @@ int exit_value(sexp rtnv, int but_continue) {
 	else exit(BUGGER);
 }
 
+/*---- void close_up_shop() {  */
+
 void close_up_shop() {
 	int i = 0;
 
 	for (i = 0; magic_string && i < n_magic_strings; i++) Free(magic_string[i]);
 	Free(magic_string);
 	Free(history_file);
-
-	delete_builtin(builtins);
 
 	sexp_release_object(ctx,ERRCON);
 	sexp_release_object(ctx,sym);
@@ -5917,16 +4934,61 @@ void close_up_shop() {
 }
 
 
-void preignition() {
-  igor_pid = getpid();
-  igor_pgid = getpgid(igor_pid);
+/**
+ * initializes variables and enables job control
+ * NOTE: function substantially stolen by the very useful glibc manual:
+ * http://www.gnu.org/software/libc/manual/html_node/Implementing-a-Shell.html
+ */
+void terminal_control_init() {
+	if (isatty(ttyfd)) {                                                 // is the shell interactive?
+		while (tcgetpgrp(ttyfd) != (ttypgid = getpgrp()))
+			kill(igor_pid, SIGTTIN);                                                    // make sure we are in the foreground
 
-  // These are the stdin, stdout and stderr on entry
-  IN = dup(0); 
-  OUT = dup(1);
-  ERR = dup(2);
+                /**
+                 * ignore all the job control stop signals and install custom signal handlers
+                 */
+		signal(SIGQUIT, SIG_IGN);
+		signal(SIGTTOU, SIG_IGN);
+		signal(SIGTTIN, SIG_IGN);
+		signal(SIGTSTP, SIG_IGN);
+		signal(SIGINT, SIG_IGN);
+		signal(SIGCHLD, &signalHandler_child);
+
+		setpgid(igor_pid, igor_pid);                                         // we make the shell process as new process group leader
+		igor_pgid = getpgrp();
+		if (igor_pid != igor_pgid) { /*  */
+			printf("Error, the shell is not process group leader");
+			exit(EXIT_FAILURE);
+		}
+		if (tcsetpgrp(ttyfd, igor_pgid) == -1)      // if bdsh cannot grab control of the terminal
+			tcgetattr(ttyfd, &terminalmodes);             // we save default terminal attributes for shell.
+	} 
+	else {
+		printf("Could not make BD-shell interactive. Exiting..\n");
+		exit(EXIT_FAILURE);
+	}
 }
 
+
+
+
+/*---- void preignition() {  */
+
+void preignition() {
+	igor_pid = getpid();
+	igor_pgid = getpgid(igor_pid);
+
+  // These are the stdin, stdout and stderr on entry
+	IN = dup(0); 
+	OUT = dup(1);
+	ERR = dup(2);
+
+	ttypgid = igor_pgid;
+	ttyfd = 0;
+}
+
+
+/*---- void set_special_vars(int argc, char **argv, int pid) {  */
 
 void set_special_vars(int argc, char **argv, int pid) {
 	char *str = NULL;
@@ -5953,6 +5015,8 @@ void set_special_vars(int argc, char **argv, int pid) {
 	igor_set(ctx,"*", ""); // no "last backgrounded job"
 }
 
+
+/*---- void initialise_symbol_table() {  */
 
 void initialise_symbol_table() {
 	int i = 0;
@@ -6009,87 +5073,89 @@ void initialise_symbol_table() {
 
 
 
+/*---- void initialise_interpreter(int argc, char **argv) {  */
+
 void initialise_interpreter(int argc, char **argv) {
 	sexp res = SEXP_FALSE;
 	char **ss = NULL;
 
     // ctx is global
-  sexp_scheme_init();
+	sexp_scheme_init();
 
-  ctx = sexp_make_eval_context(NULL, NULL, NULL, 0, 0);
-  env = sexp_context_env(ctx);
+	ctx = sexp_make_eval_context(NULL, NULL, NULL, 0, 0);
+	env = sexp_context_env(ctx);
   //env = NULL;
 
-  sexp_preserve_object(ctx,ERRCON);
-  sexp_preserve_object(ctx,sym);
-  sexp_preserve_object(ctx,igor_execute);
-  sexp_preserve_object(ctx,current_input);
-  sexp_preserve_object(ctx,current_output);
-  sexp_preserve_object(ctx,current_error);
-  sexp_preserve_object(ctx,res);
+	sexp_preserve_object(ctx,ERRCON);
+	sexp_preserve_object(ctx,sym);
+	sexp_preserve_object(ctx,igor_execute);
+	sexp_preserve_object(ctx,current_input);
+	sexp_preserve_object(ctx,current_output);
+	sexp_preserve_object(ctx,current_error);
+	sexp_preserve_object(ctx,res);
 
 #if defined(TRACK_LOADING)
-  printf("LOADING STANDARD ENVIRONMENT\n");
+	printf("LOADING STANDARD ENVIRONMENT\n");
 #endif
-  sexp_load_standard_env(ctx, NULL, SEXP_SEVEN);
-  sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 0);
+	sexp_load_standard_env(ctx, NULL, SEXP_SEVEN);
+	sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 0);
 
 #if defined(TRACK_LOADING)
-  printf("INTERNS\n");
+	printf("INTERNS\n");
 #endif
-  sexp_intern(ctx,IGOR_HISTORY_FILE_VAR, -1);
-  sexp_intern(ctx,"*igor-input-source-port*", -1);
-  sexp_intern(ctx,"*igor-output-capture-port*", -1);
-  sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
-  sexp_intern(ctx,"*igor-swap-output-capture-port*", -1);
+	sexp_intern(ctx,IGOR_HISTORY_FILE_VAR, -1);
+	sexp_intern(ctx,"*igor-input-source-port*", -1);
+	sexp_intern(ctx,"*igor-output-capture-port*", -1);
+	sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
+	sexp_intern(ctx,"*igor-swap-output-capture-port*", -1);
   
 #if defined(TRACK_LOADING)
-  printf("DEFINES\n");
+	printf("DEFINES\n");
 #endif
   
-  sexp_eval_string(ctx,"(define *eof* (let ((p (open-input-file \"/dev/null\"))) (let ((e (read p))) (close-port p) e)))", -1, env);
-  sexp_eval_string(ctx,"(define (display-to-string sexpr) (let ( (out (open-output-string))) (display sexpr out) (get-output-string out))))", -1, env);
-  sexp_eval_string(ctx,"(define (write-to-string sexpr) (let ((out (open-output-string))) (write sexpr out) (get-output-string out))))", -1, env);
+	sexp_eval_string(ctx,"(define *eof* (let ((p (open-input-file \"/dev/null\"))) (let ((e (read p))) (close-port p) e)))", -1, env);
+	sexp_eval_string(ctx,"(define (display-to-string sexpr) (let ( (out (open-output-string))) (display sexpr out) (get-output-string out))))", -1, env);
+	sexp_eval_string(ctx,"(define (write-to-string sexpr) (let ((out (open-output-string))) (write sexpr out) (get-output-string out))))", -1, env);
 
 #if defined(TRACK_LOADING)
-  printf("CHIBI MODULES\n");
+	printf("CHIBI MODULES\n");
 #endif
   
-  for (ss = supporting_initialisation; ss && *ss; ss++) {
+	for (ss = supporting_initialisation; ss && *ss; ss++) {
 #if defined(TRACK_LOADING)
-	  printf("-- %s\n", *ss);
+		printf("-- %s\n", *ss);
 #endif
 
-    res = sexp_eval_string(ctx,*ss, -1, env);
-    if (sexp_exceptionp(res)) sexp_print_exception(ctx, res, SEXP_FALSE);
+		res = sexp_eval_string(ctx,*ss, -1, env);
+		if (sexp_exceptionp(res)) sexp_print_exception(ctx, res, SEXP_FALSE);
 #if defined(TRACK_LOADING)
-	  printf("   DONE\n");
+		printf("   DONE\n");
 #endif
-  }
+	}
 
-  set_special_vars(argc, argv, getpid());
+	set_special_vars(argc, argv, getpid());
 
 #if defined(BOOTSTRAP)
-  begin {
-	  if (access(BOOTSTRAP, F_OK) == Ok) {
-		  if (access(BOOTSTRAP, R_OK) != Ok) {
-				  report_error(0,"Unable to load bootstrap file, aborting", BOOTSTRAP);
-		  }
-		  sexp_load(ctx,sexp_c_string(ctx,BOOTSTRAP,-1),ENV);
-	  }
-  }
+	begin {
+		if (access(BOOTSTRAP, F_OK) == Ok) {
+			if (access(BOOTSTRAP, R_OK) != Ok) {
+				report_error(0,"Unable to load bootstrap file, aborting", BOOTSTRAP);
+			}
+			sexp_load(ctx,sexp_c_string(ctx,BOOTSTRAP,-1),ENV);
+		}
+	}
 #endif
 
 
 #if defined(extra_load_file)
-  begin {
-	  sexp_var1(elf);
+	begin {
+		sexp_var1(elf);
 
-	  sexp_preserve_object(ctx,elf);
-	  elf = sexp_c_string(ctx,extra_load_file,-1);
-	  sexp_load(ctx,elf,ENV);
-	  sexp_release_object(ctx,elf);
-  }
+		sexp_preserve_object(ctx,elf);
+		elf = sexp_c_string(ctx,extra_load_file,-1);
+		sexp_load(ctx,elf,ENV);
+		sexp_release_object(ctx,elf);
+	}
 #endif
 
   /* Incorporate local extensions */
@@ -6101,8 +5167,8 @@ void initialise_interpreter(int argc, char **argv) {
 
 
 
-/*- Running things!  */
-
+/*--- Outermost layer -- interfacing with chibi, running scripts & terminals  */
+/*---- int scripting(int i) {  */
 
 int scripting(int i) {
 	char b[100] = "";
@@ -6114,11 +5180,12 @@ int scripting(int i) {
 }
 
 
+/*---- int igor(int argc, char **argv) {  */
+
 int igor(int argc, char **argv) {
 	int i = 1;
 	int run_interactive_shell = 1;
 	int run_rc = 1;
-	int run_builtins = 1;
 	int just_exit = 0;
 	sexp_gc_var1(rtnv);
 	sexp_gc_preserve1(ctx,rtnv);
@@ -6173,7 +5240,7 @@ int igor(int argc, char **argv) {
 	// set the array that the function "command-line" returns as the list of the arguments here
 
 	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i],"--no-builtins")) run_builtins = 0;
+		if (!strcmp(argv[i],"--no-builtins")) {}
 		else if (!strcmp(argv[i], "-q") || !strcmp(argv[i], "--no-rc")) run_rc = 0;
 		else if (!strcmp(argv[i],"-h") || !strcmp(argv[i],"--help")) {
 
@@ -6187,7 +5254,6 @@ int igor(int argc, char **argv) {
 	}
 
 	if (just_exit) exit(0);
-	if (run_builtins) install_builtins();
 	if (run_rc) load_igor_rc(NULL); // first from /etc/igor-rc then ~/.igor-rc
 	
 
@@ -6304,32 +5370,4 @@ int igor(int argc, char **argv) {
 	return 0;
 }
 
-
-
-
-
-/*
-char *sexp_get_env_var(char *str) {
-	char *s = getenv(str);
-	if (!s) return SEXP_FALSE;
-	return sexp_c_string(ctx,s, -1);
-}
-	
-
-sexp sexp_set_env_var(sexp ctx, char *str, char *val) {
-	int r = setenv(str, val, 1); //overwrite, always
-	if (r) return SEXP_FALSE;
-	else return SEXP_TRUE;
-}
-	
-sexp sexp_unset_env_var(sexp ctx, char *str) {
-	int r = unsetenv(str);
-	if (r) return SEXP_FALSE;
-	else return SEXP_TRUE;
-}
-	
-*/
-
-
 /*-  The End  */
-
