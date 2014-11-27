@@ -66,12 +66,16 @@ sexp igor_env();
 extern int igor(int argc, char **argv);
 extern void close_up_shop();
 
-int main(int argc, char **argv) {
+char **ENVIRONMENT = NULL;
+
+int main(int argc, char **argv, char **envp) {
   int code = 0;
 
 #if defined(TRACK_LOADING)
   printf("IGOR\n");
 #endif
+
+  ENVIRONMENT = envp;
 
   preignition();
 

@@ -5,9 +5,10 @@
 
 #OPTLIBDIR = /opt/lib
 #OPTLOCALLIBDIR = /opt/local/lib
+
 LOCALLIBDIR = /usr/local/lib
 CHIBILIBDIR = /usr/local/lib/chibi
-CHIBISHAREDIR = /usr/local/lib/chibi
+CHIBISHAREDIR = /usr/local/share/chibi
 
 #OPTINCDIR = /opt/include
 #OPTLOCALINCDIR = /opt/local/include

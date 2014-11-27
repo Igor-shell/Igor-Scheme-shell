@@ -46,8 +46,20 @@
 
 
 
+;; Creates a new input-port from the file descriptor \var{int}.
 
+(define-c input-port (open-input-file-descriptor "fdopen")
+  (fileno (value "r" string)))
 
+;; Creates a new output-port from the file descriptor \var{int}.
+
+(define-c output-port (open-output-file-descriptor "fdopen")
+  (fileno (value "w" string)))
+
+;; Creates a new bidirectional port from the file descriptor \var{int}.
+
+(define-c input-output-port (open-input-output-file-descriptor "fdopen")
+  (fileno (value "r+" string)))
 
 
 ;; (igor-read-line isfile inport prompt histfile)

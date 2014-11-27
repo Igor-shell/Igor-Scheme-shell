@@ -1,44 +1,5 @@
-2014-01-02-14:00:40 -- Failed to evaluate [(display pork) hit an unopened output port]
-
-						  "(display pork)"
-						  ERROR in "write": invalid type, expected Output-Port: #<undef>
-						  igor: Exception raised [(display pork)]
-						  scm_func finished evaluating (display pork)
-						  You have mail, Thur. echo "(display pork) hit an unopened output port" >> BUGS
-						  "There was an error in:"
-						  "(display pork) hit an unopened output port"
-						  ERROR: bad set! syntax: (set! *last_igor_eval* (display pork) hit an unopened output port)
-
-
-  There are actually two bugs here; the first is the problem with the
-  output port, the second is that it tries to evaluate the eval'd thing.
-
-
 2014-01-29-21:03:10 Problems with  ^c and ^\ not Doing The Right Thing.
 
-						  ls -1 | sort -r | tr aeiou AEIOU" does  not work -- the window just dies.
-						  Still have the memory leak associated with completed_path and 
-
-						  ==3220== 244 (128 direct, 116 indirect) bytes in 8 blocks are definitely lost in loss record 19 of 50
-						  ==3220==    at 0x4C29E20: malloc (vg_replace_malloc.c:291)
-						  ==3220==    by 0x83F2C9E: wordexp_wrapper (in /local/home/randall/igor/src/local/csupport.so)
-						  ==3220==    by 0x83F4517: sexp_word_expand_stub (in /local/home/randall/igor/src/local/csupport.so)
-						  ==3220==    by 0x529F5D0: sexp_apply (vm.c:1218)
-						  ==3220==    by 0x402C14: completed_path (igor.c:471)
-						  ==3220==    by 0x4090BE: run_commands (igor.c:2690)
-						  ==3220==    by 0x40A033: command_loop (igor.c:3035)
-						  ==3220==    by 0x40C720: igor (igor.c:3863)
-						  ==3220==    by 0x40CAFD: main (igor.c:3940)
-						  ==3220== 
-						  ==3220== 1,015 bytes in 7 blocks are definitely lost in loss record 29 of 50
-						  ==3220==    at 0x4C2BF50: calloc (vg_replace_malloc.c:618)
-						  ==3220==    by 0x75D254C: sexp_stat_stub (filesystem.c:372)
-						  ==3220==    by 0x529F5D0: sexp_apply (vm.c:1218)
-						  ==3220==    by 0x402C14: completed_path (igor.c:471)
-						  ==3220==    by 0x4090BE: run_commands (igor.c:2690)
-						  ==3220==    by 0x40A033: command_loop (igor.c:3035)
-						  ==3220==    by 0x40C720: igor (igor.c:3863)
-						  ==3220==    by 0x40CAFD: main (igor.c:3940)
 
 								 On Sat, Jan 25, 2014 at 1:31 AM, Alex Shinn <alexshinn@gmail.com> wrote:
 								 > On Sat, Jan 25, 2014 at 7:55 AM, Ciprian Dorin Craciun
@@ -99,19 +60,6 @@
 
 
 
-Hash seems to start a line based comment.  This is ok, but we may have no way to deal with true and false?
-
-Hash seems to start a line based comment.  This is ok, but we may have no way to deal with true and false?
-Yeth? (display #t)
-"There was an error in:"
-"(display #t)"
-ERROR in "write": invalid type, expected Output-Port: #<undef>
-segmentation violation
-
-
-
-
-
 
 
 The command
@@ -122,9 +70,29 @@ doesn't print the symbol 'abc We certainly need to check strings like
 quote is a scheme symbol
 
 
-
-
 2014-08-13-20:34:15 Mysteriously exits (probably something to do with files closing)
-2014-08-13-20:34:53 pipes are *buggered*
+
+RESOLVED 2014-08-13-20:34:53 pipes are *buggered*
+
 2014-08-13-20:35:07 Doesn't appear to be a terminal (more(1) just cats)
-2014-08-13-20:36:33 Doesn't dispatch scheme expressions at the moment.
+						  2014-11-26-16:06:01  Doesn't "cat" now, but never gets terminal input
+						  							  "ls -lrt | more"
+													  pauses, but never continues.
+													  
+RESOLVED 2014-08-13-20:36:33 Doesn't dispatch scheme expressions at the moment.
+
+
+
+
+2014-11-26-15:47:45  Things happen in odd orders with sets of s-expressions:
+	 Yeth? (begin (display 1)(display 2)(display 3)(newline))
+	 123
+
+	 Yeth? (display 1)(display 2)(display 3)(newline)
+	 321Yeth? 
+
+
+
+
+
+
