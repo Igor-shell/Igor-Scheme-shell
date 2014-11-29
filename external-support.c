@@ -274,11 +274,8 @@ typedef struct PROCESSLIST {
 
 	//unsigned int status;
 	int background;
-	int suspended;
 	int blocked_on_input;
-	int exited;
-	int terminated;
-	int aborted;
+	int waitstatus;
 
 	char **command; // null-pointer-terminated array of string makes a string of the command
 	int in, out, err;
@@ -299,8 +296,8 @@ typedef struct PROCESSLIST {
 
 int njobs = 0; 							// the number of active procs
 
-static int rs_ix = 0, rs_n = 0;
-static int *return_status = NULL;
+//static int rs_ix = 0, rs_n = 0;
+//static int *return_status = NULL;
 
 
 
@@ -895,11 +892,44 @@ int set_job_status(process_list_t *job_list, int pid, int status) {
 	return 0;
 }
 
+int *dead_job_list(process_list_t *job_list) {
+	int n = 0, reap, statnum;
+	int *jlist = NULL;
+	process_list_t *p = NULL;
+		
+	if (!job_list) return NULL;
+
+	jlist = (int *)calloc(sizeof(int), 1);
+	for (p = job_list; p; p = p->next) {
+		reap = 0;
+
+		if (WIFEXITED(p->waitstatus)) {
+			reap = 1;
+			statnum = WEXITSTATUS(p->waitstatus);
+		}
+		else if (WIFSIGNALED(p->waitstatus)) {
+			reap = 1;
+			statnum = WTERMSIG(p->waitstatus);
+			if (WCOREDUMP(p->waitstatus)) statnum = -statnum;
+		}
+
+		if (reap) {
+			n++;
+			jlist = (int *)realloc(jlist,sizeof(*jlist)*(n+1));
+			jlist[n] = -1;
+			jlist[n-1] = p->jobid;
+		}
+	}
+
+	return jlist;
+}
 
 
-/*---- process_list_t* delete_jobid(process_list_t* job_list, int jobid) */
 
-process_list_t* delete_jobid(process_list_t* job_list, int jobid) {
+
+/*---- process_ist_t* ldelete_jobid(process_list_t* job_list, int jobid) */
+
+process_list_t *delete_jobid(process_list_t* job_list, int jobid) {
 	usleep(10000);
 	if (job_list == NULL) return NULL;
 
@@ -925,6 +955,16 @@ process_list_t* delete_jobid(process_list_t* job_list, int jobid) {
 	}
 	return job_list;
 }
+
+
+process_list_t *delete_dead_jobs(process_list_t *job_list, int *dead_jobs) {
+	int i;
+	for (i = 0; dead_jobs && dead_jobs[i] >= 0; i++) {
+		job_list = delete_jobid(job_list, dead_jobs[i]);
+	}
+	return job_list;
+}
+
 
 
 /*---- process_list_t* delete_jobptr(process_list_t* job_list, process_list_t *job) */
@@ -986,12 +1026,26 @@ process_list_t* get_jobptr(process_list_t *job_list, process_list_t *j) {
 	return NULL;
 }
 
-/*---- process_list_t *purge_status(process_list_t *job_list, int status)  INCOMPLETE  */
 
-process_list_t *purge_status(process_list_t *job_list, int status) /* INCOMPLETE*/  {
-#warning INCOMPLETE
-	return NULL;
-}
+void dump_process_list(process_list_t *p, char *str) {
+	int i = 0, j = 0;
+	if (p) {
+		fprintf(stderr,"\n ");
+		if (str) fprintf(stderr,"*** %s ***\n",str);
+		for (i = 0; p; p = p->next, i++) {
+			fprintf(stderr,"%3d) ", i);
+			for (j = 0; p->command[j]; j++) fprintf(stderr,"%s ", p[j]);
+			fprintf(stderr,"[%d %s %d", p->pid, p->background?"bg":"fg", p->waitstatus);
+			if (p->suspended) fprintf(stderr," suspended");
+			if (p->blocked_on_input) fprintf(stderr," blocked");
+			if (p->exited) fprintf(stderr," exited");
+			if (p->terminated) fprintf(stderr," terminated");
+			if (p->aborted) fprintf(stderr," aborted");
+			fprintf(stderr,"]\n", i);
+		}
+	}
+}	
+
 
 
 /*--- File handling */
@@ -1527,7 +1581,7 @@ int is_quoted_sexp(char *s) {
 	int n = 0;
 
 	n = 0;
-	if (*s == '\'' && (s[1] == '(') || (s[1] == '[')) {
+	if (*s == '\'' && (s[1] == '(' || s[1] == '[')) {
 		int k = is_sexp(s+1);
 		if (k) return k+1;
 	}
@@ -2993,6 +3047,8 @@ sexp cs_execute(int status, char **argv, int input, int output, int error, char 
 			proclist = insert_job(proclist, parentid, getpgid(parentid), procid, argv, status | SUSPENDED);  // Neither forground nor background at the moment, and not running yet
 			job = get_procid(proclist, procid);                             // and get it as job object
 
+			dump_process_list(proclist, "Inserted job");
+
 			if ((status & FOREGROUND) || !(status & BACKGROUND)) {
 				procid = foreground_job(job, 1);
 				//procid = waitpid(procid, &cstate, 0);
@@ -3120,9 +3176,17 @@ int wait_on_job(process_list_t* job) {
 		}
 	}
 	Dprintf("...DONE!\n");
+
+	if (WIFEXITED(status)) 	return - WEXITSTATUS(status);
+	else if (WIFSIGNALED(status)) {
+		int k = 100;
+		if (WCOREDUMP(status)) k += 200;
+
+		return -(k + WTERMSIG(status));
+	} /**** HERE ****/
 	
 	// Must have reached a terminating condition, so clean up and return
-	proclist = delete_jobptr(proclist, job);                            
+	// proclist = delete_jobptr(proclist, job);                            
 	
 	return exitval;
 }
@@ -4278,7 +4342,6 @@ void command_loop(FILE *f) {
 		}
 		line_num++;
 
-		Cprintf("about to run the command [%s]\n", cmd);
 		umask((mode_t)(S_IWGRP|S_IWOTH));
 		if (!f && !running_script) { // reset the file descriptors
 			dup2(IN, 0);
@@ -4286,7 +4349,12 @@ void command_loop(FILE *f) {
 			dup2(ERR,2);
 		}
 
+		Cprintf("about to run the command [%s]\n", cmd);
+
 		update_internal_c_variables();
+		dump_process_list(proclist,"BEFORE");
+		proclist = delete_dead_jobs(proclist, dead_job_list(proclist));
+		dump_process_list(proclist,"AFTER");
 
 		if (*cmd != '\n' && *cmd != '\r' && *cmd) {
 			char **a = NULL;
