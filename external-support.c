@@ -20,10 +20,8 @@
 /*
   In order to Make Things Work across the scheme and unix conventions,
   unix commands will return SEXP_TRUE on success and SEXP_FALSE on
-  failure. We will maintain a stack of numeric return values which we
-  can query using "(last-command-returned)" which returns the head of
-  the list.  We will also provide (push-command-return-value rtnv) and
-  (pop-command-return-value).
+  failure. We will maintain a stack of return values with functions to
+  push/pop/examine/clear the stack.
 
   This may be a little at odds with conventional unix use, but I think
   it will work out....
@@ -219,6 +217,11 @@
 //#define Dprintf(format, args...) printf(format, ##args) // debugging the tokenising
 //#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
 
+//#define stderr_print_t_f(ctx,f,l,r) ({if (sexp_equalp(ctx,r,SEXP_TRUE)) fprintf(stderr,"%s:%d #t\n", f, l); else  fprintf(stderr,"%s:%d #f\n", f, l);})
+
+
+#define stderr_print_t_f(ctx,f,l,r) {if (sexp_equalp(ctx,r,SEXP_TRUE)) {fprintf(stderr,"%s:%d #t\n", f, l);} else  {fprintf(stderr,"%s:%d #f\n", f, l);}}
+
 
 #define Note(s)
 #if !defined(Note)
@@ -323,7 +326,7 @@ extern char *gets(char *);
 
 extern char *dispatch_scheme(char **cmd, int input, int output, int error, char *inputstring);
 
-extern sexp cs_execute(int status, char **argv, int input, int output, int error, char *inputstring);
+extern void cs_execute(int status, char **argv, int input, int output, int error, char *inputstring);
 extern sexp execute_command_array(char **cmds);
 extern sexp execute_command_string(char *cmds);
 
@@ -333,11 +336,6 @@ void run_command_epilogue(char *cmds, sexp rv);
 //sexp run_commands(cmd_t *cmd);
 //cmd_t *process_token_list(char **Argv, int in, int out,int err);
 
-int wait_on_job(process_list_t* job);
-int foreground_job(process_list_t* job, int and_continue);
-int background_job(process_list_t* job, int and_continue);
-
-
 
 /*---  Variables  */
 
@@ -346,7 +344,12 @@ int background_job(process_list_t* job, int and_continue);
 sexp ctx, env, ERRCON = SEXP_FALSE;
 sexp sym;
 sexp igor_execute;
+sexp True, False;
 sexp current_input, current_output, current_error;
+
+
+sexp bool_true;
+
 int NOTIFY_BG_PID = 1, NOTIFY_BG_EXIT = 0, NOTIFY_JOB_SIG = 0, NOTIFY_JOB_SUSP = 0, NOTIFY_JOB_STOP = 1;
 
 char *error_message = NULL;
@@ -448,11 +451,60 @@ process_list_t  *proclist  = NULL;
 int proclist_size = 0;
 int n_procs = 0;
 
+#define RSPS 256
+int rsp = 0;
+int *ristack = NULL;
+sexp *rsstack = NULL;
+
+
+
+/*
+  The rvstack holds the "truth" value -- 1 on successful execution, otherwise zero.  The rsstack holds the actual value as a scheme atom 
+*/
+inline int push_rv_int(sexp ctx, int rv) {
+
+	if (rsp % RSPS == 0) {
+		ristack = (int *)realloc(ristack, (sizeof(int) * (rsp + RSPS)));
+		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
+	}
+	
+	rsstack[rsp] = sexp_make_fixnum(rv);
+	rv = !rv;
+	ristack[rsp++] = rv;
+	return rv;
+};
+
+inline int push_rv_str(sexp ctx, char *rv) {
+	int rvi;
+	if (rsp % RSPS == 0) {
+		ristack = (int *)realloc(ristack, (sizeof(int) * (rsp + RSPS)));
+		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
+	}
+	if (!strcmp(rv,"#f")) ristack[rsp] = 0;
+	else ristack[rsp] = 1;
+
+	rvi = ristack[rsp];
+	
+	rsstack[rsp++] = sexp_c_string(ctx,rv,-1);
+	return rvi;
+};
+
+
+inline int rsi() {
+	if (rsp <= 0) return -1;
+	else return ristack[rsp - 1];
+}
+inline sexp rss() {
+	if (rsp <= 0) return SEXP_FALSE;
+	else return rsstack[rsp - 1];
+}
+
+inline void pop_rs() {
+	if (rsp > 0) --rsp;
+}
+
+
 static struct termios terminalmodes;
-
-
-sexp push_exit_val, pop_exit_val, examine_exit_val, clear_exit_values;
-
 
 
 /****  the $$ variables need finishing ****/
@@ -504,6 +556,7 @@ char *supporting_initialisation[] = {
 	"(define " IGOR_TRACKING_LIST_VAR " (list))",
 	"(define (" IGOR_TRACKING_FUNCTION_VAR " args) (apply dnl args)))",
 	"(define (dnl . args) (if (null? args) (display "") (let () (map display args) (newline))))",
+
 
 #if 1
 	"(define *igor-display-prologue* #f)",
@@ -588,7 +641,7 @@ sexp check_exception (int emit, sexp ctx, sexp res, char *message, char *subject
 	sexp_gc_var1(err);
 	sexp_gc_preserve1(ctx,err);
 
-	err = SEXP_FALSE;
+	err = False;
 
 	ERRCON = res;
 
@@ -832,219 +885,6 @@ char *string_array_as_string(int argc, char **argv) {
   builtins
   
 */
-
-
-/*--- Job management */
-
-/*---- inserts a process into the list */
-process_list_t *insert_job(process_list_t *job_list, pid_t ppid, pid_t pgid, pid_t pid, char **command, int status) {
-	usleep(10000);
-	process_list_t *job = (process_list_t *)calloc(1, sizeof(process_list_t));
-
-	if (!job) {
-		fprintf(stderr,"Unable to insert new process, out of memory!\n");
-		abort();
-	}
-	
-	job->jobid = 0;
-	job->ppid = ppid;
-	job->pid = pid;
-	job->pgid = pgid;
-
-	if (status & BACKGROUND) job->background = BACKGROUND;
-	if (status & SUSPENDED) job->suspended = SUSPENDED;
-	if (status & BLOCKED_ON_INPUT) job->blocked_on_input = BLOCKED_ON_INPUT;
-	if (status & EXITED) job->exited = EXITED;
-	if (status & TERMINATED) job->terminated = TERMINATED;
-	if (status & ABORTED) job->aborted = ABORTED;
-
-	job->command = duplicate_string_array(command);
-	job->next = NULL;
-
-	if (job_list == NULL) {
-		job_list = job;
-	} else {
-		process_list_t *p;
-		int n = 0;
-		for (p = job_list; p; p = p->next) if (n < p->jobid) n = p->jobid;
-		job->next = job_list;
-		job_list = job;
-	}
-	job->jobid++;
-	return job_list;
-}
-
-/*---- set status of process */
-int set_job_status(process_list_t *job_list, int pid, int status) {
-	usleep(10000);
-	process_list_t *p = job_list;
-	for (; p && p->pid != pid; p = p->next);
-	if (p) {
-		if (status & BACKGROUND) p->background = BACKGROUND;
-		if (status & SUSPENDED) p->suspended = SUSPENDED;
-		if (status & BLOCKED_ON_INPUT) p->blocked_on_input = BLOCKED_ON_INPUT;
-		if (status & EXITED) p->exited = EXITED;
-		if (status & TERMINATED) p->terminated = TERMINATED;
-		if (status & ABORTED) p->aborted = ABORTED;
-
-		return 1;
-	}
-	return 0;
-}
-
-int *dead_job_list(process_list_t *job_list) {
-	int n = 0, reap, statnum;
-	int *jlist = NULL;
-	process_list_t *p = NULL;
-		
-	if (!job_list) return NULL;
-
-	jlist = (int *)calloc(sizeof(int), 1);
-	for (p = job_list; p; p = p->next) {
-		reap = 0;
-
-		if (WIFEXITED(p->waitstatus)) {
-			reap = 1;
-			statnum = WEXITSTATUS(p->waitstatus);
-		}
-		else if (WIFSIGNALED(p->waitstatus)) {
-			reap = 1;
-			statnum = WTERMSIG(p->waitstatus);
-			if (WCOREDUMP(p->waitstatus)) statnum = -statnum;
-		}
-
-		if (reap) {
-			n++;
-			jlist = (int *)realloc(jlist,sizeof(*jlist)*(n+1));
-			jlist[n] = -1;
-			jlist[n-1] = p->jobid;
-		}
-	}
-
-	return jlist;
-}
-
-
-
-
-/*---- process_ist_t* ldelete_jobid(process_list_t* job_list, int jobid) */
-
-process_list_t *delete_jobid(process_list_t* job_list, int jobid) {
-	usleep(10000);
-	if (job_list == NULL) return NULL;
-
-	process_list_t *p = NULL, *prev = NULL;
-
-	if (job_list && job_list->jobid == jobid) {
-		p = job_list;
-		job_list = p->next;
-		delete_string_array(p->command);
-		free(p);
-	}
-	else {
-		for (p = job_list; p && jobid != p->jobid; p = p->next) {
-			prev = p;
-		}
-		if (p) {
-			if (!prev) job_list = p->next;
-			else prev->next = p->next;
-			
-			delete_string_array(p->command);
-			free(p);
-		}
-	}
-	return job_list;
-}
-
-
-process_list_t *delete_dead_jobs(process_list_t *job_list, int *dead_jobs) {
-	int i;
-	for (i = 0; dead_jobs && dead_jobs[i] >= 0; i++) {
-		job_list = delete_jobid(job_list, dead_jobs[i]);
-	}
-	return job_list;
-}
-
-
-
-/*---- process_list_t* delete_jobptr(process_list_t* job_list, process_list_t *job) */
-
-process_list_t* delete_jobptr(process_list_t* job_list, process_list_t *job) {
-	usleep(10000);
-	if (job_list == NULL) return NULL;
-
-	process_list_t *p = NULL, *prev = NULL;
-
-	if (job && job == job_list) {
-		job_list = job->next;
-		delete_string_array(job->command);
-		free(job);
-	}
-	else {
-		for (p = job_list; p && p != job; p = p->next) {
-			prev = p;
-		}
-		if (p) {
-			if (!prev) job_list = p->next;
-			else prev->next = p->next;
-
-			delete_string_array(p->command);
-			free(p);
-		}
-	}
-	
-	return job_list;
-}
-
-/*---- process_list_t* get_jobid(process_list_t *job_list, int jid) */
-process_list_t* get_jobid(process_list_t *job_list, int jid) {
-	usleep(10000);
-	process_list_t *p;
-	for (p = job_list; p; p = p->next) {
-		if (p->jobid == jid) return p;
-	}
-	return NULL;
-}
-
-/*---- process_list_t* get_procid(process_list_t *job_list, int value) */
-process_list_t* get_procid(process_list_t *job_list, int pid) {
-	usleep(10000);
-	process_list_t *p;
-	for (p = job_list; p; p = p->next) {
-		if (p->pid == pid) return p;
-	}
-	return NULL;
-}
-
-/*---- process_list_t* get_jobptr(process_list_t *job_list, process_list_t *j) */
-process_list_t* get_jobptr(process_list_t *job_list, process_list_t *j) {
-	usleep(10000);
-	process_list_t *p;
-	for (p = job_list; p; p = p->next) {
-		if (p == j) return p;
-	}
-	return NULL;
-}
-
-
-void dump_process_list(process_list_t *p, char *str) {
-	int i = 0, j = 0;
-	if (p) {
-		fprintf(stderr,"\n ");
-		if (str) fprintf(stderr,"*** %s ***\n",str);
-		for (i = 0; p; p = p->next, i++) {
-			fprintf(stderr,"%3d) ", i);
-			for (j = 0; p->command[j]; j++) fprintf(stderr,"%s ", p[j]);
-			fprintf(stderr,"[%d %s %d", p->pid, p->background?"bg":"fg", p->waitstatus);
-			if (p->suspended) fprintf(stderr," suspended");
-			if (p->blocked_on_input) fprintf(stderr," blocked");
-			if (p->exited) fprintf(stderr," exited");
-			if (p->terminated) fprintf(stderr," terminated");
-			if (p->aborted) fprintf(stderr," aborted");
-			fprintf(stderr,"]\n", i);
-		}
-	}
-}	
 
 
 
@@ -1702,7 +1542,7 @@ sexp sexp_get_procedure(sexp ctx, sexp env, char *procname) {
 	tmp = sexp_intern(ctx,procname,-1);
 	proc = sexp_env_ref(ctx,env,tmp,SEXP_FALSE);
 	if (sexp_procedurep(proc))	sym = proc;
-	else sym = SEXP_FALSE;
+	else sym = False;
 	sexp_gc_release2(ctx);
 	return sym;
 }
@@ -1761,12 +1601,12 @@ char *get_input_string(sexp ctx, sexp instr) {
 /*---- sexp make_input_string(sexp ctx, char *str) {  */
 
 sexp make_input_string(sexp ctx, char *str) {
-	sexp isp = SEXP_FALSE;
+	sexp isp = False;
 	char *s = NULL;
 
 	asprintf(&s,"(open-read-string \"%s\")", str);
 	if (s && *s) isp = sexp_eval_string(ctx, s, -1, env);
-	else isp = SEXP_FALSE;
+	else isp = False;
 
 	free(s);
 	return isp;
@@ -1794,7 +1634,7 @@ sexp sexp_wordexp_sexp(sexp ctx, sexp sstr) {
 
 	i = wordexp(s,&w,0);
 	if (!i) {
-		result  = SEXP_NULL;
+		result  = False;
 		for (i = w.we_wordc-1; i >= 0; i--) {
 			str = sexp_c_string(ctx, w.we_wordv[i], -1);
 			result = sexp_cons(ctx,str,result);
@@ -1842,7 +1682,7 @@ sexp sexp_wordexp_ffi(sexp ctx, sexp self, sexp n, sexp sstr) {
 
 	i = wordexp(s,&w,0);
 	if (!i) {
-		result  = SEXP_NULL;
+		result = SEXP_NULL;
 		for (i = w.we_wordc-1; i >= 0; i--) {
 			str = sexp_c_string(ctx, w.we_wordv[i], -1);
 			result = sexp_cons(ctx,str,result);
@@ -2010,7 +1850,7 @@ sexp sexp_wordexp(char *sstr) {
 			result = sexp_cons(ctx,str,result);
 		}
 	}
-	else result = SEXP_FALSE;
+	else result = False;
 
 	free(s);
 	wordfree(w);
@@ -2447,47 +2287,14 @@ void signalHandler_child(int p)
 	pid = waitpid(WAIT_ANY, &status, WUNTRACED | WNOHANG); // intercept the process that sends the signal
 		 
 	if (pid > 0) {                                                                          // if there are information about it
-		process_list_t* job = get_procid(proclist, pid);
-		if (!job) return;
-
 		if (WIFEXITED(status)) {                                                    // case the process exits normally
-			if (job->background) {                             // child in background terminates normally
-				if (NOTIFY_BG_EXIT) printf("\n[%d]+  Done\n", job->jobid); // inform the user
-				proclist = delete_jobptr(proclist,job);                                                    // delete it from the list
-			}
+			if (NOTIFY_BG_EXIT) printf("\n[%d]+  Done\n", pid); // inform the user
 		} 
 		else if (WIFSIGNALED(status)) {                                  // the job dies because of a signal
-			if (NOTIFY_JOB_SIG) printf("\n[%d]+  KILLED\n", job->jobid); // inform the user
-			proclist = delete_jobptr(proclist, job);                                                     // delete the job from the list
+			if (NOTIFY_JOB_SIG) printf("\n[%d]+  KILLED\n", pid); // inform the user
 		} 
-		else if (WIFSTOPPED(status)) {                                  // a job receives a SIGSTP signal
-			if (job->background) {                           // the job is in bg
-				tcsetpgrp(ttyfd, ttypgid);
-				set_job_status(proclist, pid, BLOCKED_ON_INPUT);                     // change its status to "waiting for input"
-				if (NOTIFY_JOB_SUSP) printf("\n[%d]+   suspended [wants input]\n",
-					job->jobid);                                  // inform the user
-			} 
-			else {                                                                           // otherwise, the job is going to be suspended
-				tcsetpgrp(ttyfd, job->pgid);
-				set_job_status(proclist, pid, SUSPENDED);                         // we modify the status
-				if (NOTIFY_JOB_STOP) printf("\n[%d]+   stopped\n", job->jobid); // and inform the user
-			}
-			return;
-		} 
-		else {
-			if (job->background) {                          // otherwise, delete the job from the list
-				proclist = delete_jobptr(proclist,job);                                                    // delete it from the list
-			}
-		}
 		tcsetpgrp(ttyfd, ttypgid);
 	}
-}
-
-void register_death(process_list_t *job, int signalled, int exitval) {
-	job->exitval = exitval;
-	if (signalled > 0) job->terminated =  TERMINATED;
-	else if (!signalled) job->exited =  EXITED;
-	else job->aborted = ABORTED;
 }
 
 void catch_sigchld(int signum) {
@@ -2527,110 +2334,16 @@ void catch_sigquit(int signum) {
 void signalhandler(int p) {
 	int exitval = -1;
 	pid_t pid = -1;
-	process_list_t *job;
 
 	pid = waitpid(WAIT_ANY, &exitval, WUNTRACED | WNOHANG); // intercept the process that sends the signal
 
 	if (pid > 0) {                                                                          // if there are information about it
-		job = get_procid(proclist, pid);                      // get the job from the list
-		if (!job)	return;
-
-		if (WIFSTOPPED(exitval)) { // SIGSTOP
-			if (!(job->background)) { // we are suspending things
-				tcsetpgrp(0, job->pgid);
-				job->suspended = SUSPENDED;;
-			} 
-			else { // mark it as blocked
-				tcsetpgrp(0, igor_pgid);
-				job->suspended=  SUSPENDED;
-			}
-			return;
-		}
-		else if (WIFCONTINUED(exitval)) { // SIGCONT
-			if (job->background) {
-				job->suspended = 0;
-			}
-			proclist = delete_jobptr(proclist, job);
-		} 
-		else if (WIFSIGNALED(exitval)) { // killed
-			register_death(job,1,exitval);
-			proclist = delete_jobptr(proclist, job);
-		} 
-		else if (WIFEXITED(exitval)) { // Normal exit
-#if 1
-			if (job->background) register_death(job,0, exitval);
-			else register_death(job,0,exitval);
-#else
-			register_death(job,0,exitval);
-			proclist = delete_jobptr(proclist, job);
-#endif
-		} 
-		else { // Something must have happened, just remove it from the array; we won't be able to do anything with it.
-			if (job->background) register_death(job,-1,exitval); /*  */
-			proclist = delete_jobptr(proclist, job);
-		}
 		tcsetpgrp(0, igor_pgid);
 	}
 }
 
 
 /*--- Command execution calls  */
-
-
-int check_job_control_builtins()
-{
-/*
-  if (strcmp("in", commandArgv[0]) == 0) {
-  launchJob(commandArgv + 2, *(commandArgv + 1), STDIN, FOREGROUND);
-  return 1;
-  }
-  if (strcmp("out", commandArgv[0]) == 0) {
-  launchJob(commandArgv + 2, *(commandArgv + 1), STDOUT, FOREGROUND);
-  return 1;
-  }
-*/
-#warning This is totally wrong
-#if 0
-	char **commandArgv = 0;
-
-	if (strcmp("bg", commandArgv[0]) == 0) {
-		if (commandArgv[1] == NULL)
-			return 0;
-		if (strcmp("in", commandArgv[1]) == 0)
-			launchJob(commandArgv + 3, *(commandArgv + 2), STDIN, BACKGROUND);
-		else if (strcmp("out", commandArgv[1]) == 0)
-			launchJob(commandArgv + 3, *(commandArgv + 2), STDOUT, BACKGROUND);
-		else
-			launchJob(commandArgv + 1, "STANDARD", 0, BACKGROUND);
-		return 1;
-	}
-	if (strcmp("fg", commandArgv[0]) == 0) {
-	if (commandArgv[1] == NULL)
-		return 0;
-	int jid = (int) atoi(commandArgv[1]);
-	process_list_t* job = get_jobid(job_list, jid);
-	if (job == NULL)
-		return 0;
-	if (job->status & (BLOCKED_ON_INPUT|SUSPENDED))
-		putJobForeground(job, TRUE);
-	else                                                                                                // status = BACKGROUND
-		putJobForeground(job, FALSE);
-	return 1;
-	}
-	if (strcmp("jobs", commandArgv[0]) == 0) {
-		printJobs();
-		return 1;
-	}
-	if (strcmp("kill", commandArgv[0]) == 0) {
-		if (commandArgv[1] == NULL)
-			return 0;
-		kill_job(atoi(commandArgv[1]));
-		return 1;
-	}
-#endif
-	return 0;
-}
-
 
 
 /*----- straight execution of  a command array  */
@@ -2649,6 +2362,7 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	sexp rv = SEXP_TRUE;
 	sexp_preserve_object(ctx, rv);
 
+	rv = True;
 	ENTRY("");
 #if 0
 	for (i = 0; argv && argv[i]; i++) {
@@ -2683,10 +2397,15 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	//fprintf(stderr,"EXECUTING: %s\n", cmds);
 	if (is_sexp(cmds)) status |= SCHEME_EXPRESSION;
 
-	rv = cs_execute(status, argv, -1, -1, -1, NULL);
+	cs_execute(status, argv, -1, -1, -1, NULL);
+	rv = rss();
+	
+	stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,rv);
 	run_command_epilogue(cmds, rv);
 
 	DEPARTURE("");
+	sexp_release_object(ctx,rv);
+	pop_rs();
 	return rv;
 }
 
@@ -2695,9 +2414,9 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 /*----- straight execution of  a commandline  */
 
 sexp execute_command_string(char *cmds) { // The string cmds is freed!
-	sexp rv = SEXP_ZERO;
 	char **tokenise_cmdline(char *cmdline);
 	char **argv = 0;
+	sexp rv = SEXP_ZERO;;
 
 	//fprintf(stderr,"ecs %s\n", cmds);
 
@@ -2715,7 +2434,7 @@ char *backquote_system_call(char *str) {
 	char *fname = NULL;
 	char *bqbuff = NULL;
 	struct stat stbuf[1];
-	sexp n = SEXP_FALSE;
+	sexp n = False;
 
 	ENTRY("");
 	asprintf(&fname, "/tmp/igor.%d.%d", igor_pid, serial_number++);
@@ -2851,79 +2570,6 @@ char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)
 
 
 
-#if 0
-/**
- * executes a program redirecting STDIN or STDOUT if newDescriptor != STANDARD
- */
-void executeCommand(char *command[], char *file, int newDescriptor, int executionMode) {
-	int STDIN_FILENO=0, STDOUT_FILENO=1, STDIN=1, STDOUT=2;
-	int commandDescriptor;
-        /**
-         *  Set the STDIN/STDOUT channels of the new process.
-         */
-	if (newDescriptor == STDIN) {
-		commandDescriptor = open(file, O_RDONLY, 0600);                                        // open file for read only (it's STDIN)
-		dup2(commandDescriptor, STDIN_FILENO);
-		Close(commandDescriptor);
-	}
-	if (newDescriptor == STDOUT) {
-		commandDescriptor = open(file, O_CREAT | O_TRUNC | O_WRONLY, 0600); // open (create) the file truncating it at 0, for write only
-		dup2(commandDescriptor, STDOUT_FILENO);
-		Close(commandDescriptor);
-	}
-	if (execvp(*command, command) == -1)
-		perror("BD-shell(execvp)");
-}
-
-/**
- * forks a process and launches a program as child
- */
-void launchJob(char *command[], char *file, int newDescriptor, int executionMode) {
-	pid_t pid;
-	pid = fork();
-	switch (pid) {
-	case -1:
-		perror("BD-shell(fork)");
-		exit(EXIT_FAILURE);
-		break;
-	case 0:
-                /**
-                 *  we set the handling for job control signals back to the default.
-                 */
-		signal(SIGINT, SIG_DFL);
-		signal(SIGQUIT, SIG_DFL);
-		signal(SIGTSTP, SIG_DFL);
-		signal(SIGCHLD, &signalHandler_child);
-		signal(SIGTTIN, SIG_DFL);
-		usleep(20000);                                                             // fixes a synchronization bug. Needed for short commands like ls
-		setpgrp();                                                                                     // make the child as new process group leader
-		if (executionMode & FOREGROUND)
-			tcsetpgrp(ttyfd, getpid());                                           // if we want the process to be in foreground
-		if (executionMode & BACKGROUND)
-			printf("%d\n", (int) getpid());              // inform the user about the new job in bg
-					 
-		executeCommand(command, file, executionMode);
-
-		exit(EXIT_SUCCESS);
-		break;
-	default:
-		setpgid(pid, pid);                                                                        // we also make the child a new process group leader from here
-                // to avoid race conditions
-		proclist = insertJob(pid, pid, *(command), file, (int) executionMode); // insert the job in the list
-
-		process_list_t* job = get_procid(proclist, pid);                             // and get it as job object
-
-		if (executionMode & FOREGROUND) {
-			putJobForeground(job, 0);                                              // put the job in foreground (if desired)
-		}
-		if (executionMode & BACKGROUND)
-			putJobBackground(job, 0);                                             // put the job in background (if desired)
-		break;
-	}
-}
-
-#endif
-
 
 /*----     Execute a command -- C dispatch function */
 
@@ -2950,24 +2596,28 @@ char *dispatch_scheme(char **argv, int input, int output, int error, char *input
 
 /*----- int cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) -- execute a command or scheme expression  */
 
-sexp cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) {
-	int parentid = igor_pid, procid = -1;
+void cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) {
+//	int parentid = igor_pid;
+	int procid = -1;
 //	int gid = igor_pgid;
-	sexp rts = SEXP_NULL;
 	int rtv = 0;
-	process_list_t *job = NULL;
+//	process_list_t *job = NULL;
 
 	char *cmd = *argv;
-	char *returnstr = NULL;
+//	char *returnstr = NULL;
 //	process_list_t* job = NULL;
 
 	ENTRY("");
+	
 
 #define ifewsxz if  // Westley, the Dread Pirate Rabbits added the "ewsxz".  
 	                    // If one can't have input into the C standard just because one
                        // is a rabbit, then there is something dreadfully unfair....
                        
-	ifewsxz (!cmd || !*cmd) return SEXP_TRUE; // it's ok to try and run an empty process ... it just doesn't do anything
+	ifewsxz (!cmd || !*cmd) {
+		push_rv_int(ctx,0); // "zero" is success.....
+		return;             // it's ok to try and run an empty process ... it just doesn't do anything
+	}
 
 //	if (input < 0) input = IN;
 //	if (output < 0) output = OUT;
@@ -2976,6 +2626,7 @@ sexp cs_execute(int status, char **argv, int input, int output, int error, char 
 	if (status & SCHEME_EXPRESSION || is_sexp(*argv)) {
 		char *instring = NULL, *outstring = NULL;
 		int i;
+
 		TRACK;
 /*
   (let* ((o (current-output-port))
@@ -3012,18 +2663,13 @@ sexp cs_execute(int status, char **argv, int input, int output, int error, char 
 		}
 
 		if (output == 1 || error == 2) {
-			//if (output == 1) write(output, outstring, strlen(outstring));
-			//if (output == 2) write(error, outstring, strlen(outstring));
-			return SEXP_TRUE;
+			push_rv_int(ctx,0); // int zero is "true"
 		}
-		else returnstr = outstring;
-		
-//		returnstr = dispatch_scheme(argv,input,output,error,inputstring);
-//		write(output, returnstr, strlen(returnstr));
-//		write(output, "\n", 1);
-		rts = sexp_c_string(ctx,returnstr,-1);
+		else {
+			push_rv_str(ctx,outstring);
+		}
 	}
-	else {
+	else { // must be a command
 		TRACK;
 
 		if (1) { // Rewrite arguments which should be evaluated as scheme expressions
@@ -3042,40 +2688,56 @@ sexp cs_execute(int status, char **argv, int input, int output, int error, char 
 		procid = fork();
 
 		if (procid > 0) { // this is the parent
+			int stats = 0;
+			int cid;
 			setpgid(procid, procid); // make the child a process group leader
 
-			proclist = insert_job(proclist, parentid, getpgid(parentid), procid, argv, status | SUSPENDED);  // Neither forground nor background at the moment, and not running yet
-			job = get_procid(proclist, procid);                             // and get it as job object
-
-			dump_process_list(proclist, "Inserted job");
-
-			if ((status & FOREGROUND) || !(status & BACKGROUND)) {
-				procid = foreground_job(job, 1);
-				//procid = waitpid(procid, &cstate, 0);
-				fprintf(stderr,"FOOOORE! %d\n", rtv);
-
-//				rtv = wait_on_job(job);
-			}
-
-			if (status & BACKGROUND) {
-				rtv = background_job(job, 1);
-				fprintf(stderr,"BAAACKGROUND!  %d\n", rtv);
+			if (procid) {
+				char bgpid[80];
+				Dprintf("...backgrounding\n");
+				sprintf(bgpid,"%d",procid);
+				igor_set(ctx,"$!", bgpid);
 			}
 			
 			
+			//cid = waitpid(procid, &stats, WNOHANG);
+			cid = wait(&stats);
+
+			fprintf(stderr,"RETURNED %d:%d:%d\n", procid, cid, stats);
+			fprintf(stderr,"WIFEXITED = %d\n", WIFEXITED(stats));
+			if (WIFEXITED(stats)) fprintf(stderr,"WEXITSTATUS = %d\n", WEXITSTATUS(stats));
+			if (WIFSIGNALED(stats)) {
+				fprintf(stderr,"WIFSIGNALED = %d\n", WTERMSIG(stats));
+				fprintf(stderr,"WCOREDUMP = %d\n", WCOREDUMP(stats));
+			}
+
+
+			if (WIFEXITED(stats)) {
+				rtv = WEXITSTATUS(stats);
+			}
+			else if (WIFSIGNALED(stats)) {
+				rtv = -WTERMSIG(stats);
+				if (WCOREDUMP(stats)) rtv = rtv - 1000;
+			}
+			else fprintf(stderr,"Bugger, eh?%d\n", rtv);
+
+			fprintf(stderr,"rtv = %d\n", rtv);
+			
+
 			// Now we return ...
-			if (rtv != 0) {
-				sexp_apply(ctx,push_exit_val,sexp_make_fixnum(rtv));
-				rts = SEXP_FALSE;
+
+			if (rtv > 0) {
+				rtv = push_rv_int(ctx,rtv);
+				fprintf(stderr,"return is false\n");
 			}
-			else rts = SEXP_TRUE;
-
-			if (sexp_equalp(ctx, rts, SEXP_TRUE))
-				fprintf(stderr, "Looks like we got a #t Vern\n");
-			else
-				fprintf(stderr, "Ah ain't never seen a #f 'round here, Zeb.\n");
-
-			TRACK;
+			else if (rtv < 0) {
+				rtv = push_rv_int(ctx,rtv);
+				fprintf(stderr,"return is false\n");
+			}
+			else {
+				rtv = push_rv_int(ctx,rtv);
+				fprintf(stderr,"return is true\n");
+			}
 		}
 		else if (procid == 0) { // this is the child
 			int n = 0;
@@ -3100,7 +2762,7 @@ sexp cs_execute(int status, char **argv, int input, int output, int error, char 
 			usleep(2000);// fixes a synchronization bug. Needed for short commands like ls according to the code from bdshell
 
 			if (status & FOREGROUND) tcsetpgrp(ttyfd, getpid());
-			else if (NOTIFY_BG_PID && (status & BACKGROUND)) printf("%d\n", (int) getpid());   // inform the user about the new job in bg
+//			else if (NOTIFY_BG_PID && (status & BACKGROUND)) printf("%d\n", (int) getpid());   // inform the user about the new job in bg
 
 			setpgrp();
 
@@ -3144,127 +2806,13 @@ sexp cs_execute(int status, char **argv, int input, int output, int error, char 
 			report_error(errno, "Failed to fork", NULL);
 //		sexp_destroy_context(ctx);
 
-#if 1
-			sexp_apply(ctx,push_exit_val, sexp_make_fixnum(-9999));
-#else
-			sexp_apply(ctx,push_exit_val, sexp_c_string(ctx,"Failed to fork", -1));
-#endif
-			return SEXP_FALSE;
+			push_rv_str(ctx,"Failed to fork!");
+			rtv = 0; // zero is false *after* the push
 		}
 	}
-	if (sexp_equalp(ctx,rts,SEXP_TRUE))	fprintf(stderr,"TRUE!\n");
-	else fprintf(stderr,"FALSE!\n");
-
-	return rts;
 }
 
 
-
-/*----- job support routines */
-
-//  waits for a job, blocking unless it has been suspended;  deletes the job after it has been executed
-
-int wait_on_job(process_list_t* job) {
-	int status, exitval = 0;
-	Dprintf("...WAITING\n");
-	for(; ((exitval = waitpid(job->pid, &status, WNOHANG)) == 0);) {      // While there are still active offspring....
-		fprintf(stderr,".");
-		usleep(10000);
-		if (job->suspended) {
-			fprintf(stderr, "woj %d %d\n", WIFEXITED(status), WEXITSTATUS(status));
-			return exitval;                       // suspended, so return to "parent"
-		}
-	}
-	Dprintf("...DONE!\n");
-
-	if (WIFEXITED(status)) 	return - WEXITSTATUS(status);
-	else if (WIFSIGNALED(status)) {
-		int k = 100;
-		if (WCOREDUMP(status)) k += 200;
-
-		return -(k + WTERMSIG(status));
-	} /**** HERE ****/
-	
-	// Must have reached a terminating condition, so clean up and return
-	// proclist = delete_jobptr(proclist, job);                            
-	
-	return exitval;
-}
-
-/**
- * puts a job in foreground. If continueJob = TRUE, sends the process group
- * a SIGCONT signal to wake it up. After the job is waited successfully, it
- * restores the control of the terminal to the shell
- */
-int foreground_job(process_list_t* job, int please_continue) {
-	int rts = 0;
-	
-	if (!job) return 0;
-	
-	Dprintf("...Running\n");
-	
-	//printf("*** %o %o %o\n", job->status, (~BACKGROUND & job->status), (~BACKGROUND & job->status) | FOREGROUND);
-
-	job->background = 0;
-	//job->status = (~BACKGROUND & job->status) | FOREGROUND; // clear background flag, set forground flag
-	
-	tcsetpgrp(ttyfd, job->pgid);                            // give it the control of the terminal
-	if (please_continue) {                                  // continue the job (if desired)
-		if (kill(-job->pgid, SIGCONT) < 0)                   // by sending it a SIGCONT signal
-			perror("kill (SIGCONT)");
-	}
-	
-	rts = wait_on_job(job);                                           // wait for the job
-
-	Dprintf("...finished running\n");
-	tcsetpgrp(ttyfd, ttypgid);                              // give the shell control of the terminal
-	return rts;
-}
-
-/**
- * puts a job in background, and sends the job a continue signal, if continueJob = TRUE
- * puts the shell in foreground
- */
-int background_job(process_list_t* job, int please_continue) {
-	char *bgpid = NULL;
-	if (!job) return  0;
-
-	
-	job->background = 1;
-	
-	Dprintf("...backgrounding\n");
-	asprintf(&bgpid,"%d",job->pid);
-	if (bgpid) {
-		igor_set(ctx,"$!", bgpid);
-		Free(bgpid);
-	}
-
-	if (please_continue) {
-		if (job->blocked_on_input) job->blocked_on_input = 0; /*  */
-
-           // fixes another synchronization bug: if the child process launches
-		     // a SIGCHLD and is set to BLOCKED_ON_INPUT before this point has been
-           // reached, then it would be set to BACKGROUND again
-
-		if (kill(-job->pgid, SIGCONT) < 0) {
-			Dprintf("...running in background\n");
-			perror("kill (SIGCONT)");
-			return SIGABRT;
-		}
-	}
-
-	tcsetpgrp(ttyfd, ttypgid);                             // paranoia: give the shell control of terminal
-	return 0;
-}
-
-/**
- * kills a Job given its number
- */
-void kill_job(int jid)
-{
-	process_list_t *job = get_jobid(proclist, jid);                                   // get the job from the list
-	kill(job->pid, SIGKILL);                                                               // send the job a SIGKILL signal
-}
 
 /*--- Parsing the command line  */
 
@@ -3979,7 +3527,12 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 			TRACK;
 
 			if (excmd) {
-				*rv = cs_execute(make_background, cmd, in, out, err, NULL);
+				//int rvi;
+				cs_execute(make_background, cmd, in, out, err, NULL);
+				*rv = rss();
+				pop_rs();
+				
+				stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 			}
 			
 			delete_string_array(cmd);
@@ -4024,29 +3577,41 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 				
 				// Now fire off the leading program and the following program in the bg
 				begin {
-					sexp qv;
+					sexp qv = True;
 //					int  r;
 					
 					// This is the program being piped into
 				
 					if (excmd) {
-						*rv = cs_execute(make_background,cmd, in, out, err, NULL);
+						int rvi;
+						cs_execute(make_background,cmd, in, out, err, NULL);
+						*rv = rss();
+						rvi = rsi();
+						pop_rs();
+
+						stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 						Close(pipefd[1]);
 
 						if (make_outpipe) out = oout;
 						if (make_errpipe) err = oerr;
 
-						if (sexp_equalp(ctx,*rv, SEXP_TRUE) ){
+						if (rvi) {
 							argv = simple_command(argv, &qv, excmd, pipefd[0], oout, oerr, 0);
+							stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 						}
+#if 1
+						else {
+							argv = simple_command(argv, &qv, 0, pipefd[0], oout, oerr, 0);
+							stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+						}
+#endif
 						Close(pipefd[0]);
 
 						STATUS(r);
 						done = 0; // the semicolon implies that there may be something after...
 						
-						
-						if (*rv == SEXP_TRUE) {
-							if (qv != SEXP_TRUE) *rv = qv;
+						if (*rv == SEXP_TRUE || sexp_equalp(ctx, *rv, SEXP_TRUE)) {
+							if (qv != SEXP_TRUE || !sexp_equalp(ctx,qv,SEXP_TRUE)) *rv = qv;
 						}
 					}
 					return argv;
@@ -4092,7 +3657,11 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 		fprintf(stderr,"make_background = %d, in = %d, out = %d, err = %d\n", make_background, in, out, err);
 
 #endif			
-		*rv = cs_execute(make_background,cmd, in, out, err, NULL);
+		
+		cs_execute(make_background,cmd, in, out, err, NULL);
+		*rv = rss();
+		pop_rs();
+		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 	}
 
 	delete_string_array(cmd);
@@ -4118,6 +3687,7 @@ char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) 
 	
 	if (argv && argv[0]) {
 		argv = simple_command(argv, rv, excmd, in, out, err, 0); // in, out, and err may be modified by simple_command to take piping into account. 
+		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 		
 		if (argv && argv[0]) { 
 //			fprintf(stderr,"%p %p: %s\n", argv, *argv, *argv);
@@ -4126,6 +3696,7 @@ char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) 
 				argv++; // consume ;
 				print_rv(rv,excmd);
 				argv = linear_chain(argv, rv, excmd, in, out, err);
+				stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 			}
 			else if (*argv == andsep || *argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, andsep)  || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
@@ -4155,6 +3726,7 @@ char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 	while (!done && argv && argv[0] ) {
 		TRACK;
 		if (argv && argv[0]) argv = linear_chain(argv, rv, excmd, in, out, err);
+		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 
 		if (argv && argv[0]) { 
 			if (*argv == andsep || !strcmp(*argv,andsep)) {
@@ -4165,6 +3737,8 @@ char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 		
 				print_rv(rv,excmd);
 				argv = and_chain(argv, rv, excmd, in, out, err);
+				stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+
 				if (!sexp_equalp(ctx,*rv, SEXP_TRUE)) excmd = 0;
 				print_rv(rv,excmd);
 			}
@@ -4196,6 +3770,7 @@ char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 		while (!done && argv && *argv) {
 			TRACK;
 			if (argv && *argv) argv = and_chain(argv, rv, excmd, in, out, err);
+			stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 
 			if (argv && *argv) {
 				if (*argv == orsep || !strcmp(*argv, orsep)) {
@@ -4207,6 +3782,7 @@ char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 
 
 					argv = and_chain(argv, rv, excmd, in, out, err);
+					stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 
 					if (sexp_equalp(ctx, *rv, SEXP_TRUE)) excmd = 0;
 					print_rv(rv,excmd);
@@ -4247,11 +3823,14 @@ char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err)
 		TRACK;	
 		if (rv) argv = or_chain(argv, rv, excmd, in, out, err);
 		else argv = or_chain(argv, NULL, excmd, in, out, err);
+
+		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 	}
 	else {
 		TRACK;
 		argv++; // consume beginning delimiter
 		argv = or_chain(argv, rv,excmd, in, out, err);
+		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 
 		//if (rv && excmd && sexp_equalp(ctx, *rv, SEXP_FALSE)) excmd = 0;
 
@@ -4315,7 +3894,7 @@ void command_loop(FILE *f) {
 	char *cmd = NULL;
 	char **argv = NULL;
 	int line_num = 0, N = 0;
-	sexp rv = SEXP_FALSE;
+	sexp rv = False;
 
 	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
@@ -4408,7 +3987,7 @@ void command_loop(FILE *f) {
 	char **argv  = NULL;
 	int i = 0;
 	int line_num = 0;
-	sexp rv = SEXP_TRUE;
+	sexp rv = True;
 
 	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
@@ -4526,8 +4105,8 @@ sexp load_igor_rc(char *urc) {
 			rtn = sexp_load(ctx, fname, ENV);
 		}
 		else {
-			if (sexp_equalp(ctx, SEXP_TRUE, run_source_file(sexp_string_data(fname)))) rtn = SEXP_TRUE;
-			else rtn = SEXP_FALSE;
+			if (sexp_equalp(ctx, SEXP_TRUE, run_source_file(sexp_string_data(fname)))) rtn = True;
+			else rtn = False;
 		}
 	}
 	
@@ -4542,8 +4121,8 @@ sexp load_igor_rc(char *urc) {
 			rtn = sexp_load(ctx, fname, NULL);
 		}
 		else {
-			if (sexp_equalp(ctx,SEXP_TRUE, run_source_file(sexp_string_data(fname)))) rtn = SEXP_TRUE;
-			else rtn = SEXP_FALSE;
+			if (sexp_equalp(ctx,SEXP_TRUE, run_source_file(sexp_string_data(fname)))) rtn = True;
+			else rtn = False;
 		}
 	}
 	sexp_gc_release2(ctx);
@@ -4857,7 +4436,7 @@ sexp scm_func(cmd_t *cmd, char **argv, int in, int out, char *inputstring) {
 		}
 		else if (sexp_exceptionp(ERRCON)) {
 			report_error(0,"Exception raised in scm_func", p);
-			ERRCON = SEXP_TRUE;
+			ERRCON = True;
 		}
 		Free(p);
 	}
@@ -5056,7 +4635,7 @@ void initialise_symbol_table() {
 /*---- void initialise_interpreter(int argc, char **argv) {  */
 
 void initialise_interpreter(int argc, char **argv) {
-	sexp res = SEXP_FALSE;
+	sexp res = False;
 	char **ss = NULL;
 
     // ctx is global
@@ -5089,6 +4668,20 @@ void initialise_interpreter(int argc, char **argv) {
 	sexp_intern(ctx,"*igor-output-capture-port*", -1);
 	sexp_intern(ctx,"*igor-swap-input-source-port*", -1);
 	sexp_intern(ctx,"*igor-swap-output-capture-port*", -1);
+
+/*
+	sexp_intern(ctx,"arch-signal",-1);
+	sexp_intern(ctx,"signal-lookup",-1);
+	sexp_intern(ctx,"signal-sym",-1);
+	sexp_intern(ctx,"signal-dflt",-1);
+	sexp_intern(ctx,"signal-desc",-1);
+*/
+
+	sexp_intern(ctx,"x86",-1);
+	sexp_intern(ctx,"arm",-1);
+	sexp_intern(ctx,"mips",-1);
+	sexp_intern(ctx,"sparc",-1);
+	sexp_intern(ctx,"alpha",-1);
   
 #if defined(TRACK_LOADING)
 	printf("DEFINES\n");
@@ -5102,16 +4695,28 @@ void initialise_interpreter(int argc, char **argv) {
 	printf("CHIBI MODULES\n");
 #endif
   
-	sexp_eval_string(ctx,"(define *igor-exit-value-stack* (list))", -1, env);
-	sexp_eval_string(ctx, "(define (*igor_push_exit_value* value) (set! *igor-exit-value-stack* (cons value *igor-exit-value-stack*)) value)", -1, env);
-	sexp_eval_string(ctx, "(define (*igor_pop_exit_value*) (if (null? *igor-exit-value-stack*) #f (let ((value *igor-exit-value-stack*)) (set! *igor-exit-value-stack* (cdr *igor-exit-value-stack*)) value)))", -1, env);
-	sexp_eval_string(ctx, "(define (*igor_examine_exit_value*) (if (null? *igor-exit-value-stack*) #f (car *igor-exit-value-stack*)))", -1, env);
-	sexp_eval_string(ctx, "(define (*igor_clear_exit_values*) (set! *igor-exit-value-stack* (list)))", -1, env);
 
-	push_exit_val = sexp_get_procedure(ctx,env,"*igor_push_exit_value*");
-	pop_exit_val = sexp_get_procedure(ctx,env,"*igor_pop_exit_value*");
-	examine_exit_val = sexp_get_procedure(ctx,env,"*igor_examine_exit_value*");
-   clear_exit_values = sexp_get_procedure(ctx,env,"*igor_clear_exit_values*");
+
+
+
+
+	// Exit values will be symbolic values 
+	
+/*
+	sexp_eval_string(ctx,"(define *igor-exit-stack* (list))", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-push-exit* value) (set! *igor-exit-value-stack* (cons value *igor-exit-value-stack*)) value)", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-pop-exit*) (if (null? *igor-exit-value-stack*) '() (let ((value *igor-exit-value-stack*)) (set! *igor-exit-value-stack* (cdr *igor-exit-value-stack*)) value)))", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-examine-exit*) (if (null? *igor-exit-value-stack*) #f (car *igor-exit-value-stack*)))", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-clear-exit*) (set! *igor-exit-value-stack* (list)))", -1, env);
+
+
+	sexp_eval_string(ctx,"(define *igor-exit-value-stack* (list))", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-push-exit-value* value) (set! *igor-exit-value-stack* (cons value *igor-exit-value-stack*)) value)", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-pop-exit-value*) (if (null? *igor-exit-value-stack*) '() (let ((value *igor-exit-value-stack*)) (set! *igor-exit-value-stack* (cdr *igor-exit-value-stack*)) value)))", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-examine-exit-value*) (if (null? *igor-exit-value-stack*) #f (car *igor-exit-value-stack*)))", -1, env);
+	sexp_eval_string(ctx, "(define (*igor-clear-exit-values*) (set! *igor-exit-value-stack* (list)))", -1, env);
+*/
+
 
 	for (ss = supporting_initialisation; ss && *ss; ss++) {
 #if defined(TRACK_LOADING)
