@@ -156,13 +156,6 @@
 #define DEPARTURE(fmt, ...) {}
 #endif
 
-#if 1
-#define CHECKRV(sx,rv) {if (sx) Checkrvsexp(rv, excmd); else Checkrvint(rv, excmd); }
-#else
-#define CHECKRV(sx,rv) {}
-#endif
-
-
 #if 0
 #define TRACK {fprintf(stderr,"###     Tracking %s@%s:%d\n", __PRETTY_FUNCTION__, __FILE__, __LINE__);}
 #else
@@ -3574,7 +3567,7 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 			if (excmd) {
 				//int rvi;
 				cs_execute(make_background, cmd, in, out, err, NULL);
-				dump_rs();
+				//dump_rs();
 			}
 			
 			delete_string_array(cmd);
@@ -3625,13 +3618,13 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 					// This is the program being piped into
 				
 					if (excmd) {
-						///int rvi;
+						int rvi;
 						sexp rvs;
 						#warning This may need careful exercise!
 
 						cs_execute(make_background,cmd, in, out, err, NULL);
 						rvs = rss(); // we may replace the primary return value with the secondary return value
-						///rvi = rsi();
+						rvi = rsi();
 						pop_rs();
 
 						Close(pipefd[1]);
@@ -3652,6 +3645,9 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 
 						STATUS(r);
 						done = 0; // the semicolon implies that there may be something after...
+					}
+					else {
+						argv = simple_command(argv, 0, pipefd[0], oout, oerr, 0);
 					}
 
 					DEPARTURE("");
@@ -3731,11 +3727,13 @@ char **linear_chain(char **argv, int excmd, int in, int out, int err) {
 			if (*argv == nextsep || !strcmp(*argv, nextsep)) {
 				TRACK;
 				argv++; // consume ;
+				pop_rs(); // we don't really care what the return value is....
 				argv = linear_chain(argv, excmd, in, out, err);
 			}
 			else if (*argv == andsep || *argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, andsep)  || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
 			}
+			else abort();
 		}
 	}
 
@@ -3744,9 +3742,10 @@ char **linear_chain(char **argv, int excmd, int in, int out, int err) {
 }
 
 
+
 /*----- char **and_chain(char **argv, int excmd, int in, int out, int err) {  */
 /*
-  and-chain ---> returns the last exit value, stops on failure
+  and-chain ---> stops on failure, eats the rest of the chain
 
   __ linear-chain _______________________________________________________
   \ __ && __ and-chain __/
@@ -3759,29 +3758,35 @@ char **and_chain(char **argv, int excmd, int in, int out, int err) {
 
 	while (!done && argv && argv[0] ) {
 		TRACK;
+
 		if (argv && argv[0]) argv = linear_chain(argv, excmd, in, out, err);
 
 		if (argv && argv[0]) { 
 			if (*argv == andsep || !strcmp(*argv,andsep)) {
-				///int rvi;
+				int rvi;
 				sexp rvs;
+				char *rvss = NULL;
 				TRACK;
 				
-				///rvi = rsi();
+				rvi = rsi();
 				rvs = rss();
+				rvss = write_to_string(rvs);
 				pop_rs();
+				fprintf(stderr,"#########  %s:%d   vi = %d, rvs = %s\n",__FUNCTION__, __LINE__, rvi, rvss);
+				Free(rvss);
 				
 				argv++; // consume &&
 		
-				
+				if (!rvi) excmd = 0;
 				if (!(rvs == SEXP_TRUE || sexp_equalp(ctx, rvs, SEXP_TRUE))) excmd = 0;
-		
-				argv = and_chain(argv, excmd, in, out, err);
+
+				//argv = and_chain(argv, excmd, in, out, err);
 			}
 			else if (*argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
 				done = 1;
 			}
+			else abort();
 		}
 	}
 
@@ -3792,10 +3797,10 @@ char **and_chain(char **argv, int excmd, int in, int out, int err) {
 
 /*----- char **or_chain(char **argv, int excmd, int in, int out, int err) {  */
 /*
-  or-chain  ---> returns the last exit value, stops on success
+  or-chain  ---> stops on success, eats the rest of the chain
 
   ___ and-chain  _________________________________________________________
-  \ __ || __ or-chain__/
+  \ __ || __ and-chain__/
 */
 
 char **or_chain(char **argv, int excmd, int in, int out, int err) {
@@ -3807,24 +3812,31 @@ char **or_chain(char **argv, int excmd, int in, int out, int err) {
 		
 		if (argv && *argv) {
 			if (*argv == orsep || !strcmp(*argv, orsep)) {
-				///int rvi;
+				int rvi;
 				sexp rvs;
+				char *rvss = NULL;
 				TRACK;
 				
-				///rvi = rsi();
+				rvi = rsi();
 				rvs = rss();
+				rvss = write_to_string(rvs);
 				pop_rs();
+				fprintf(stderr,"#########  %s:%d   rvi = %d, rvs = %s\n",__FUNCTION__, __LINE__, rvi, rvss);
+				Free(rvss);
 
 				argv++; // consume ||
 				
-				if (rvs == SEXP_TRUE || sexp_equalp(ctx,rvs, SEXP_TRUE)) excmd = 0;
-				
-				argv = or_chain(argv, excmd, in, out, err);
+
+				if (rvi) excmd = 0;
+				if (rvs != SEXP_FALSE || !sexp_equalp(ctx, rvs, SEXP_FALSE)) excmd = 0;
+				if (!rvi)  excmd = 1;
+
 			}
 			else if (*argv == begblock || *argv == endblock || !strcmp(*argv,begblock) || !strcmp(*argv,endblock)) {
 				TRACK;
 				done = 1;
 			}
+			else abort();
 		}
 	}
 
