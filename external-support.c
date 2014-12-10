@@ -156,6 +156,13 @@
 #define DEPARTURE(fmt, ...) {}
 #endif
 
+#if 1
+#define CHECKRV(sx,rv) {if (sx) Checkrvsexp(rv, excmd); else Checkrvint(rv, excmd); }
+#else
+#define CHECKRV(sx,rv) {}
+#endif
+
+
 #if 0
 #define TRACK {fprintf(stderr,"###     Tracking %s@%s:%d\n", __PRETTY_FUNCTION__, __FILE__, __LINE__);}
 #else
@@ -166,12 +173,6 @@
 #define TRACKARGV {fprintf(stderr,"###     Tracking %s@%s:%d\n", __PRETTY_FUNCTION__, __FILE__, __LINE__); fprintf_string_array(stderr,-1,argv);fprintf(stderr,"\n");}
 #else
 #define TRACKARGV {}
-#endif
-
-#if 0
-#define print_rv(rv,excmd) {fprintf(stderr,"                                      [%s@%s:%d]    %d    *rv == SEXP_TRUE = %d\n",__PRETTY_FUNCTION__, __FILE__, __LINE__, excmd, *rv == SEXP_TRUE);}
-#else
-#define print_rv(rv,excmd) {}
 #endif
 
 #if 0
@@ -220,7 +221,7 @@
 //#define stderr_print_t_f(ctx,f,l,r) ({if (sexp_equalp(ctx,r,SEXP_TRUE)) fprintf(stderr,"%s:%d #t\n", f, l); else  fprintf(stderr,"%s:%d #f\n", f, l);})
 
 
-#define stderr_print_t_f(ctx,f,l,r) {if (sexp_equalp(ctx,r,SEXP_TRUE)) {fprintf(stderr,"%s:%d #t\n", f, l);} else  {fprintf(stderr,"%s:%d #f\n", f, l);}}
+#define stderr_print_t_f(ctx,r) {if (sexp_equalp(ctx,r,SEXP_TRUE)) {fprintf(stderr,"%s:%d  #t\n", __FUNCTION__, __LINE__);} else  {fprintf(stderr,"%s:%d #f\n", __FUNCTION__, __LINE__);}}
 
 
 #define Note(s)
@@ -307,6 +308,7 @@ int njobs = 0; 							// the number of active procs
 /*---  function declarations  */
 
 extern sexp argv_to_list(sexp ctx, char **argv, int len);
+extern char *write_to_string(sexp sexpr);
 
 extern int starts_sexp(char *s);
 extern int is_sexp(char *s);
@@ -320,6 +322,7 @@ extern char *jump_fence(char *cp, char lookingfor, char escape);
 
 extern char *evaluate_scheme_expression(int emit, char *sexp, char *instring);
 extern char *exit_val_evaluate_scheme_expression(int emit, char *sexp, char *instring);
+
 extern char *gets(char *);
 
 //extern char *dispatch_scheme_stuff(cmd_t *cmd);
@@ -457,53 +460,6 @@ int *ristack = NULL;
 sexp *rsstack = NULL;
 
 
-
-/*
-  The rvstack holds the "truth" value -- 1 on successful execution, otherwise zero.  The rsstack holds the actual value as a scheme atom 
-*/
-inline int push_rv_int(sexp ctx, int rv) {
-
-	if (rsp % RSPS == 0) {
-		ristack = (int *)realloc(ristack, (sizeof(int) * (rsp + RSPS)));
-		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
-	}
-	
-	rsstack[rsp] = sexp_make_fixnum(rv);
-	rv = !rv;
-	ristack[rsp++] = rv;
-	return rv;
-};
-
-inline int push_rv_str(sexp ctx, char *rv) {
-	int rvi;
-	if (rsp % RSPS == 0) {
-		ristack = (int *)realloc(ristack, (sizeof(int) * (rsp + RSPS)));
-		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
-	}
-	if (!strcmp(rv,"#f")) ristack[rsp] = 0;
-	else ristack[rsp] = 1;
-
-	rvi = ristack[rsp];
-	
-	rsstack[rsp++] = sexp_c_string(ctx,rv,-1);
-	return rvi;
-};
-
-
-inline int rsi() {
-	if (rsp <= 0) return -1;
-	else return ristack[rsp - 1];
-}
-inline sexp rss() {
-	if (rsp <= 0) return SEXP_FALSE;
-	else return rsstack[rsp - 1];
-}
-
-inline void pop_rs() {
-	if (rsp > 0) --rsp;
-}
-
-
 static struct termios terminalmodes;
 
 
@@ -587,6 +543,80 @@ char *supporting_initialisation[] = {
 	NULL};
 
 /*-- Functions and procedures  */
+
+void Checkrvsexp(sexp rv, int excmd) {
+	fprintf(stderr,"     CHECKRV(rv) %s@%s:%d ",__PRETTY_FUNCTION__, __FILE__, __LINE__);
+	char *s = write_to_string(rv);
+	fprintf(stderr,"rv = %s, excmd = %d\n",s, excmd);
+	Free(s);
+}
+
+void Checkrvint(int rv, int excmd) {
+	fprintf(stderr,"     CHECKRV(rv) %s@%s:%d ",__PRETTY_FUNCTION__, __FILE__, __LINE__);
+	fprintf(stderr,"rv = %d, excmd = %d\n", rv, excmd);
+}
+
+/*--- return stack stuff */
+/*
+  The rvstack holds the "truth" value -- 1 on successful execution, otherwise zero.  The rsstack holds the actual value as a scheme atom 
+*/
+int push_rv_int(sexp ctx, int rv) {
+	TRACK;
+	if (rsp % RSPS == 0) {
+		ristack = (int *)realloc(ristack, (sizeof(int) * (rsp + RSPS)));
+		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
+	}
+	
+	rsstack[rsp] = sexp_make_fixnum(rv);
+
+	if (!rv) rv = 1;
+	else rv = 0;
+
+	ristack[rsp++] = rv;
+	return rv;
+};
+
+int push_rv_str(sexp ctx, char *rv) {
+	int rvi;
+	TRACK;
+	if (rsp % RSPS == 0) {
+		ristack = (int *)realloc(ristack, (sizeof(int) * (rsp + RSPS)));
+		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
+	}
+	if (!strcmp(rv,"#f")) ristack[rsp] = 0;
+	else ristack[rsp] = 1;
+
+	rvi = ristack[rsp];
+	
+	rsstack[rsp++] = sexp_c_string(ctx,rv,-1);
+	return rvi;
+};
+
+
+int rsi() {
+	if (rsp <= 0) return -1;
+	else return ristack[rsp - 1];
+}
+sexp rss() {
+	if (rsp <= 0) return SEXP_FALSE;
+	else return rsstack[rsp - 1];
+}
+
+void pop_rs() {
+	if (rsp > 0) --rsp;
+}
+
+void dump_rs() {
+	int i;
+	fprintf(stderr,"\n/---------------------------------\\ \n");
+	for (i = 0; i < rsp; i++) {
+      fprintf(stderr,"%d) %d [", i, ristack[i]);
+		sexp_write(ctx,rsstack[i],sexp_current_error_port(ctx));
+		fprintf(stderr, "]\n");
+	}
+	fprintf(stderr,"\n\\---------------------------------/ \n");
+}
+
 /*--- For communication with main(),getting the current ports,... */
 
 sexp igor_ctx() { return ctx;};
@@ -2400,7 +2430,7 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	cs_execute(status, argv, -1, -1, -1, NULL);
 	rv = rss();
 	
-	stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,rv);
+	stderr_print_t_f(ctx,rv);
 	run_command_epilogue(cmds, rv);
 
 	DEPARTURE("");
@@ -2488,13 +2518,9 @@ void write_sexp(sexp ctx, sexp bit, int use_err) {
 }
 
 
-
-
-
 /*----- Evaluate a string containing an s-expression (possibly with an input string) and return the result as a string  */
 char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { // This returns an allocated string which ought to be freed (ultimately)
 	char *rstr = NULL;
-	const char *sexpr_starts = "(";
 	char *sexpr = NULL;
 	char *psexpr = NULL;
 	int run_word_expand = 0;
@@ -2502,7 +2528,10 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 	sexp_gc_var1(result);
 	sexp_gc_preserve1(ctx, result);
 
-	if (strchr(sexpr_starts, *Sexpr)) {
+	if (!Sexpr) return NULL;
+	//fprintf(stderr,"[[%p | %c]]\n", Sexpr, *Sexpr);
+
+	if (strchr("(", *Sexpr)) {
 		char *t = jump_sexp(Sexpr, '\\');
 		if (t == Sexpr) {
 			report_error(0,"Bad s-expression",Sexpr);
@@ -2543,6 +2572,16 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 	return rstr;
 }
 
+
+char *write_to_string(sexp sexpr) { // This returns an allocated string which ought to be freed (ultimately)
+	begin {
+		return strdup(sexp_string_data(sexp_write_to_string(ctx, sexpr)));
+	}
+	return NULL;
+}
+
+
+
 /*-----  char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)   */
 /* This returns the exit value of the scheme expression */
 
@@ -2581,10 +2620,13 @@ char *exit_val_evaluate_scheme_expression(int emit, char *sexpr, char *instring)
 char *dispatch_scheme(char **argv, int input, int output, int error, char *inputstring) {
 	int i;
 	char *ss = NULL;
+
+#if 0
 	fprintf(stderr,"Dispatching");
 	for (i = 0; argv && argv[i]; i++) fprintf(stderr," %s", argv[i]);
 	fprintf(stderr,"\n");
-
+#endif
+	
 	for (i = 0; argv[i]; i++) {
 		if (ss) Free(ss);
 		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
@@ -2594,7 +2636,7 @@ char *dispatch_scheme(char **argv, int input, int output, int error, char *input
 	return ss;
 }
 
-/*----- int cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) -- execute a command or scheme expression  */
+/*----- void cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) -- execute a command or scheme expression  */
 
 void cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) {
 //	int parentid = igor_pid;
@@ -2615,7 +2657,9 @@ void cs_execute(int status, char **argv, int input, int output, int error, char 
                        // is a rabbit, then there is something dreadfully unfair....
                        
 	ifewsxz (!cmd || !*cmd) {
+		TRACK;
 		push_rv_int(ctx,0); // "zero" is success.....
+		DEPARTURE("");
 		return;             // it's ok to try and run an empty process ... it just doesn't do anything
 	}
 
@@ -2663,9 +2707,11 @@ void cs_execute(int status, char **argv, int input, int output, int error, char 
 		}
 
 		if (output == 1 || error == 2) {
+			TRACK;
 			push_rv_int(ctx,0); // int zero is "true"
 		}
 		else {
+			TRACK;
 			push_rv_str(ctx,outstring);
 		}
 	}
@@ -2724,19 +2770,15 @@ void cs_execute(int status, char **argv, int input, int output, int error, char 
 			fprintf(stderr,"rtv = %d\n", rtv);
 			
 
-			// Now we return ...
-
-			if (rtv > 0) {
-				rtv = push_rv_int(ctx,rtv);
-				fprintf(stderr,"return is false\n");
-			}
-			else if (rtv < 0) {
-				rtv = push_rv_int(ctx,rtv);
-				fprintf(stderr,"return is false\n");
+			// Now we return ... Remember, it toggles the "truth" value....
+			
+			TRACK;
+			rtv = push_rv_int(ctx,rtv);
+			if (rtv) {
+				fprintf(stderr,"return is true (%d)\n", rtv);
 			}
 			else {
-				rtv = push_rv_int(ctx,rtv);
-				fprintf(stderr,"return is true\n");
+				fprintf(stderr,"return is false (%d)\n", rtv);
 			}
 		}
 		else if (procid == 0) { // this is the child
@@ -2806,10 +2848,13 @@ void cs_execute(int status, char **argv, int input, int output, int error, char 
 			report_error(errno, "Failed to fork", NULL);
 //		sexp_destroy_context(ctx);
 
+			TRACK;
 			push_rv_str(ctx,"Failed to fork!");
 			rtv = 0; // zero is false *after* the push
 		}
 	}
+	DEPARTURE("");
+	fprintf(stderr, "*********** rtv = %d, ristack[%d] = %d\n", rtv, rsp-1, ristack[rsp-1]);
 }
 
 
@@ -3250,7 +3295,7 @@ char **tokenise_cmdline(char *cmdline) {
 
 /*----- run_recursive_descent routines */
 
-/*----- char **simple_sexpression(char **argv, sexp *rv, int excmd) { // terminated by the end of the s-expression  */
+/*----- char **simple_sexpression(char **argv, int excmd) { // terminated by the end of the s-expression  */
 
 char **simple_sexpression(char **argv, int in, int out, int err) { 
 // terminated by the end of the s-expression
@@ -3260,7 +3305,7 @@ char **simple_sexpression(char **argv, int in, int out, int err) {
 
 	if (!argv || !*argv) return argv;
 	ENTRY("");
-
+	
 	c = (char **)calloc(2, sizeof(char  *));
 	*c = *argv;
 	c[1] = NULL;
@@ -3281,9 +3326,9 @@ char **simple_sexpression(char **argv, int in, int out, int err) {
 	return argv+1;
 }
 
-/*----- char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err, int force_bg) {  */
+/*----- char **simple_command(char **argv, int excmd, int in, int out, int err, int force_bg) {  */
 
-char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err, int force_bg) {
+char **simple_command(char **argv, int excmd, int in, int out, int err, int force_bg) {
 	int done = 0;
 	int i;//, fN = 0;
 	int infd = -1, outfd = -1, errfd = -1;
@@ -3304,7 +3349,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 	if (err >= 0) errfd = err;
 	
 	ENTRY("");
-
+	
 	for (i = 0; !done && argv && *argv; i++) {
 		TRACK;
 		TRACKARGV;
@@ -3529,15 +3574,13 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 			if (excmd) {
 				//int rvi;
 				cs_execute(make_background, cmd, in, out, err, NULL);
-				*rv = rss();
-				pop_rs();
-				
-				stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+				dump_rs();
 			}
 			
 			delete_string_array(cmd);
 			cmd = NULL;
 
+			DEPARTURE("");
 			return argv;
 		}
 			
@@ -3577,43 +3620,41 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 				
 				// Now fire off the leading program and the following program in the bg
 				begin {
-					sexp qv = True;
 //					int  r;
 					
 					// This is the program being piped into
 				
 					if (excmd) {
-						int rvi;
+						///int rvi;
+						sexp rvs;
+						#warning This may need careful exercise!
+
 						cs_execute(make_background,cmd, in, out, err, NULL);
-						*rv = rss();
-						rvi = rsi();
+						rvs = rss(); // we may replace the primary return value with the secondary return value
+						///rvi = rsi();
 						pop_rs();
 
-						stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 						Close(pipefd[1]);
 
 						if (make_outpipe) out = oout;
 						if (make_errpipe) err = oerr;
 
-						if (rvi) {
-							argv = simple_command(argv, &qv, excmd, pipefd[0], oout, oerr, 0);
-							stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+						if (rvs == SEXP_TRUE || sexp_equalp(ctx,rvs,SEXP_TRUE)) {
+							argv = simple_command(argv, excmd, pipefd[0], oout, oerr, 0);
 						}
 #if 1
 						else {
-							argv = simple_command(argv, &qv, 0, pipefd[0], oout, oerr, 0);
-							stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+							argv = simple_command(argv, 0, pipefd[0], oout, oerr, 0);
+							//push_rv_sexp(ctx,rvs); // put it all back on since it didn't go....
 						}
 #endif
 						Close(pipefd[0]);
 
 						STATUS(r);
 						done = 0; // the semicolon implies that there may be something after...
-						
-						if (*rv == SEXP_TRUE || sexp_equalp(ctx, *rv, SEXP_TRUE)) {
-							if (qv != SEXP_TRUE || !sexp_equalp(ctx,qv,SEXP_TRUE)) *rv = qv;
-						}
 					}
+
+					DEPARTURE("");
 					return argv;
 				}
 			}
@@ -3643,14 +3684,14 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 	// Execute command/sexpression here
 
 	if (!excmd) {
-#if 0
+#if 1
 		fprintf(stderr,"Supressing: ");
 		fprintf_string_array(stderr,-1,cmd);
 		fprintf(stderr,"\n");
 		#endif
 	}
 	else {
-#if 0
+#if 1
 		fprintf(stderr,"Executing: ");
 		fprintf_string_array(stderr,-1,cmd);
 		fprintf(stderr,"\n");
@@ -3659,9 +3700,6 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 #endif			
 		
 		cs_execute(make_background,cmd, in, out, err, NULL);
-		*rv = rss();
-		pop_rs();
-		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
 	}
 
 	delete_string_array(cmd);
@@ -3672,7 +3710,7 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 }
 
 
-/*----- char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {  */
+/*----- char **linear_chain(char **argv, int excmd, int in, int out, int err) {  */
 /*
   linear-chain ---> returns the last exit value, continues till end of chain if possible
 
@@ -3681,29 +3719,24 @@ char **simple_command(char **argv, sexp *rv, int excmd, int in, int out, int err
 								 
 */
 
-char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
+char **linear_chain(char **argv, int excmd, int in, int out, int err) {
 	//int oin = in, oout = out, oerr = err;
 	ENTRY("");
 	
 	if (argv && argv[0]) {
-		argv = simple_command(argv, rv, excmd, in, out, err, 0); // in, out, and err may be modified by simple_command to take piping into account. 
-		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+		argv = simple_command(argv, excmd, in, out, err, 0); // in, out, and err may be modified by simple_command to take piping into account. 
 		
 		if (argv && argv[0]) { 
 //			fprintf(stderr,"%p %p: %s\n", argv, *argv, *argv);
 			if (*argv == nextsep || !strcmp(*argv, nextsep)) {
 				TRACK;
 				argv++; // consume ;
-				print_rv(rv,excmd);
-				argv = linear_chain(argv, rv, excmd, in, out, err);
-				stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+				argv = linear_chain(argv, excmd, in, out, err);
 			}
 			else if (*argv == andsep || *argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, andsep)  || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
 			}
 		}
-		//if (rv && excmd && *rv != SEXP_TRUE) excmd = 0;
-		print_rv(rv,excmd);
 	}
 
 	DEPARTURE("");
@@ -3711,7 +3744,7 @@ char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) 
 }
 
 
-/*----- char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {  */
+/*----- char **and_chain(char **argv, int excmd, int in, int out, int err) {  */
 /*
   and-chain ---> returns the last exit value, stops on failure
 
@@ -3719,36 +3752,37 @@ char **linear_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) 
   \ __ && __ and-chain __/
 */
 
-char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
+char **and_chain(char **argv, int excmd, int in, int out, int err) {
 	int done = 0;
 	
 	ENTRY("");
+
 	while (!done && argv && argv[0] ) {
 		TRACK;
-		if (argv && argv[0]) argv = linear_chain(argv, rv, excmd, in, out, err);
-		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+		if (argv && argv[0]) argv = linear_chain(argv, excmd, in, out, err);
 
 		if (argv && argv[0]) { 
 			if (*argv == andsep || !strcmp(*argv,andsep)) {
+				///int rvi;
+				sexp rvs;
 				TRACK;
+				
+				///rvi = rsi();
+				rvs = rss();
+				pop_rs();
+				
 				argv++; // consume &&
 		
-				if (!sexp_equalp(ctx, *rv, SEXP_TRUE)) excmd = 0;
+				
+				if (!(rvs == SEXP_TRUE || sexp_equalp(ctx, rvs, SEXP_TRUE))) excmd = 0;
 		
-				print_rv(rv,excmd);
-				argv = and_chain(argv, rv, excmd, in, out, err);
-				stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
-
-				if (!sexp_equalp(ctx,*rv, SEXP_TRUE)) excmd = 0;
-				print_rv(rv,excmd);
+				argv = and_chain(argv, excmd, in, out, err);
 			}
 			else if (*argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
 				done = 1;
 			}
 		}
-		if (rv && excmd &&  *rv == SEXP_FALSE) excmd = 0;
-		print_rv(rv,excmd);
 	}
 
 	DEPARTURE("");
@@ -3756,7 +3790,7 @@ char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 }
 
 
-/*----- char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {  */
+/*----- char **or_chain(char **argv, int excmd, int in, int out, int err) {  */
 /*
   or-chain  ---> returns the last exit value, stops on success
 
@@ -3764,38 +3798,35 @@ char **and_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
   \ __ || __ or-chain__/
 */
 
-char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
+char **or_chain(char **argv, int excmd, int in, int out, int err) {
 	int done = 0;
 	ENTRY("")
-		while (!done && argv && *argv) {
-			TRACK;
-			if (argv && *argv) argv = and_chain(argv, rv, excmd, in, out, err);
-			stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+	while (!done && argv && *argv) {
+		TRACK;
+		if (argv && *argv) argv = and_chain(argv, excmd, in, out, err);
+		
+		if (argv && *argv) {
+			if (*argv == orsep || !strcmp(*argv, orsep)) {
+				///int rvi;
+				sexp rvs;
+				TRACK;
+				
+				///rvi = rsi();
+				rvs = rss();
+				pop_rs();
 
-			if (argv && *argv) {
-				if (*argv == orsep || !strcmp(*argv, orsep)) {
-					TRACK;
-					argv++; // consume ||
-
-					if (sexp_equalp(ctx,*rv, SEXP_TRUE)) excmd = 0;
-					print_rv(rv,excmd);
-
-
-					argv = and_chain(argv, rv, excmd, in, out, err);
-					stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
-
-					if (sexp_equalp(ctx, *rv, SEXP_TRUE)) excmd = 0;
-					print_rv(rv,excmd);
-				}
-				else if (*argv == begblock || *argv == endblock || !strcmp(*argv,begblock) || !strcmp(*argv,endblock)) {
-					TRACK;
-					done = 1;
-				}
+				argv++; // consume ||
+				
+				if (rvs == SEXP_TRUE || sexp_equalp(ctx,rvs, SEXP_TRUE)) excmd = 0;
+				
+				argv = or_chain(argv, excmd, in, out, err);
 			}
-			if (rv && excmd && *rv != SEXP_TRUE) excmd = 0;
-			print_rv(rv,excmd);
-
+			else if (*argv == begblock || *argv == endblock || !strcmp(*argv,begblock) || !strcmp(*argv,endblock)) {
+				TRACK;
+				done = 1;
+			}
 		}
+	}
 
 	DEPARTURE("");
 	return argv;
@@ -3803,7 +3834,7 @@ char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 
 
 
-/*----- char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err) {   */
+/*----- char **command_block(char **argv, int excmd, int in, int out, int err) {   */
 /*
   command-block --> returns whatever comes out
 
@@ -3813,26 +3844,22 @@ char **or_chain(char **argv, sexp *rv, int excmd, int in, int out, int err) {
 
 */
 
-char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err) { 
+char **command_block(char **argv, int excmd, int in, int out, int err) { 
 //	char **av = argv;
-
+	///int rvi;
+	sexp rvs;
 	ENTRY("");
+
 	if (!argv || !*argv) return NULL;
 
-	if (strcmp(*argv, begblock)) {
+	if (strcmp(*argv, begblock)) { // not a command block
 		TRACK;	
-		if (rv) argv = or_chain(argv, rv, excmd, in, out, err);
-		else argv = or_chain(argv, NULL, excmd, in, out, err);
-
-		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
+		argv = or_chain(argv, excmd, in, out, err);
 	}
 	else {
 		TRACK;
 		argv++; // consume beginning delimiter
-		argv = or_chain(argv, rv,excmd, in, out, err);
-		stderr_print_t_f(ctx,__PRETTY_FUNCTION__,__LINE__,*rv);
-
-		//if (rv && excmd && sexp_equalp(ctx, *rv, SEXP_FALSE)) excmd = 0;
+		argv = command_block(argv, excmd, in, out, err); // we have to allow multiple nestings...
 
 		if (!argv || !*argv || strcmp(*argv, endblock)) {
 			report_error(0,"Missing end of block", NULL);
@@ -3840,9 +3867,12 @@ char **command_block(char **argv, sexp *rv, int excmd, int in, int out, int err)
 		}
 		else argv++; // consume final delimiter
 	}
-
-	if (!sexp_equalp(ctx,*rv,SEXP_TRUE) && !sexp_equalp(ctx,*rv,SEXP_FALSE)) {
-		write_sexp(ctx, *rv, 0); // write to stdout
+	///rvi = rsi();
+	rvs = rss();
+	pop_rs();
+	
+	if (!sexp_equalp(ctx,rvs,SEXP_TRUE) && !sexp_equalp(ctx,rvs,SEXP_FALSE)) {
+		write_sexp(ctx, rvs, 0); // write to stdout
 	}
 
 	DEPARTURE("");
@@ -3948,7 +3978,7 @@ void command_loop(FILE *f) {
 			a = argv;
 			for (N = 0; argv && argv[N]; N++);
 
-			fprintf(stderr,"#if() command_loop: %s\n", cmd);
+//			fprintf(stderr,"#if() command_loop: %s\n", cmd);
 
 #if 0
 			for (i = 0; i <= N; i++) {
@@ -3958,7 +3988,7 @@ void command_loop(FILE *f) {
 #endif
 
 			while (a && *a) {
-				a = command_block(a, &rv, 1, -1, -1, -1);
+				a = command_block(a, 1, -1, -1, -1);
 #if 0
 				if (a - argv >= N) fprintf(stderr,"At end of command line\n");
 				for (n = 0; n < N && argv[n]; n++) {
@@ -4033,7 +4063,7 @@ void command_loop(FILE *f) {
 			if (C) free_cmd(C);
 			C = NULL;
 #else
-			command_block(argv, &rv, 1, -1, -1, -1);
+			command_block(argv, 1, -1, -1, -1);
 #endif
 				//if (argv) delete_string_array(argv);
 			Free(argv);
@@ -4687,7 +4717,6 @@ void initialise_interpreter(int argc, char **argv) {
 	printf("DEFINES\n");
 #endif
   
-	sexp_eval_string(ctx,"(define *eof* (let ((p (open-input-file \"/dev/null\"))) (let ((e (read p))) (close-port p) e)))", -1, env);
 	sexp_eval_string(ctx,"(define (display-to-string sexpr) (let ( (out (open-output-string))) (display sexpr out) (get-output-string out))))", -1, env);
 	sexp_eval_string(ctx,"(define (write-to-string sexpr) (let ((out (open-output-string))) (write sexpr out) (get-output-string out))))", -1, env);
 
@@ -4695,10 +4724,6 @@ void initialise_interpreter(int argc, char **argv) {
 	printf("CHIBI MODULES\n");
 #endif
   
-
-
-
-
 
 	// Exit values will be symbolic values 
 	
@@ -4718,6 +4743,9 @@ void initialise_interpreter(int argc, char **argv) {
 */
 
 
+
+
+	
 	for (ss = supporting_initialisation; ss && *ss; ss++) {
 #if defined(TRACK_LOADING)
 		printf("-- %s\n", *ss);
