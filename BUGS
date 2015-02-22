@@ -27,7 +27,7 @@
 								 > which are defined as
 								 >
 								 >     struct {
-								 >       sexp_uint_t length;
+ 								 >       sexp_uint_t length;
 								 >       char data[];
 								 >     } bytes;
 								 >
@@ -140,3 +140,6 @@ RESOLVED 2014-12-30-19:24:25
 
 						  will cause a segv.
 						  
+2015-02-22-11:21:16 #f produces a true value
+| the string length in the strncmp(cp,"#t...) was 1, not 2 in the tokening code
+RESOLVED 2015-02-22-21:30:10 

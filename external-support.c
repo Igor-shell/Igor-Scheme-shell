@@ -485,7 +485,7 @@ extern char *gets(char *);
 
 extern char *dispatch_scheme(char **cmd, int input, int output, int error, char *inputstring);
 
-extern void cs_execute(int status, char **argv, int input, int output, int error, char *inputstring);
+extern void cs_execute(int status, int groupleader, char **argv, int input, int output, int error, char *inputstring);
 extern sexp execute_command_array(char **cmds);
 extern sexp execute_command_string(char *cmds);
 
@@ -2252,7 +2252,7 @@ void refresh_history_filename() {
 	}
 	else if (sexp_booleanp(igorhistfile)) {
 		if (sexp_equalp(ctx,igorhistfile,False)) s = strdup("#f");
-		else  s = strdup("#t");
+		else 	s = strdup("#t");
 	}
 	else if (sexp_stringp(igorhistfile)) {
 		s = evaluate_scheme_expression(1, IGOR_HISTORY_FILE_VAR ,NULL);
@@ -2828,6 +2828,8 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 		START_EVAL_BLOCK " rslt" END_EVAL_BLOCK ")",
 		sexpr
 		);
+
+	fprintf(stderr,"EVALUATING %s\n", wsexpr);
 	
 	presult = sexp_eval_string(ctx, wsexpr, -1, ENV);
 	result = check_exception(emit, ctx, presult, "There was an error in:", sexpr);
@@ -2963,7 +2965,7 @@ char *dispatch_scheme(char **argv, int input, int output, int error, char *input
 	return ss;
 }
 
-/*----- void cs_execute(int status, char **argv, int input, int output, int error, char *inputstring) -- execute a command or scheme expression  */
+/*----- void cs_execute(int status, int groupleader, char **argv, int input, int output, int error, char *inputstring) -- execute a command or scheme expression  */
 
 void cs_execute(int status, int groupleader, char **argv, int input, int output, int error, char *inputstring) {
 //	int parentid = igor_pid;
@@ -2997,6 +2999,8 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 	if (status & SCHEME_EXPRESSION || is_sexp(*argv)) {
 		char *instring = NULL, *outstring = NULL;
 		int i;
+
+		status = status & ~BACKGROUND;
 
 		TRACK;
 /*
@@ -3642,13 +3646,15 @@ char **tokenise_cmdline(char *cmdline) {
 
 				}
 
-				else if (!strncmp(cp,"#t",1) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
+				else if (!strncmp(cp,"#t",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
+					fprintf(stderr,"############### true\n");
 					argv[argc++] = strdup("#t");
 					argv[argc] = 0;
 					cp += 2;
 					i = 0;
 				}
-				else if (!strncmp(cp,"#f",1) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
+				else if (!strncmp(cp,"#f",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
+					fprintf(stderr,"############### false\n");
 					argv[argc++] = strdup("#f");
 					argv[argc] = 0;
 					cp += 2;
@@ -3658,6 +3664,7 @@ char **tokenise_cmdline(char *cmdline) {
 				
 				else if ((!strncmp(cp,"#",1) && strncmp(cp,"#\\",2) && strncmp(cp,"#:",2)) || !strncmp(cp,";;",2)) {
 					// This is a comment
+					fprintf(stderr,"COMMENT\n");
 					*cp = 0;
 				}
 
@@ -3974,7 +3981,8 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 
 			if (excmd) {
 				//int rvi;
-				cs_execute(make_background, cmd, in, out, err, NULL);
+				cs_execute(make_background, 0, cmd, in, out, err, NULL);
+				pop_rs();
 				//dump_rs();
 			}
 			
@@ -4031,7 +4039,7 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 						sexp rvs;
 						#warning This may need careful exercise!
 
-						cs_execute(make_background,cmd, in, out, err, NULL);
+						cs_execute(make_background,0, cmd, in, out, err, NULL);
 						rvs = rss(); // we may replace the primary return value with the secondary return value
 						//rvi = rsi();
 						pop_rs();
@@ -4042,11 +4050,11 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 						if (make_errpipe) err = orig_err;
 
 						if (rvs == True || sexp_equalp(ctx,rvs,True)) {
-							argv = simple_command(argv, excmd, pipefd[0], orig_out, orig_err, 1); // force the following program into the background
+							argv = simple_command(argv, excmd, pipefd[0], orig_out, orig_err, BACKGROUND); // force the following program into the background
 						}
 #if 1
 						else {
-							argv = simple_command(argv, 0, pipefd[0], orig_out, orig_err, 0);
+							argv = simple_command(argv, 0, pipefd[0], orig_out, orig_err, FOREGROUND);
 							//push_rv_sexp(ctx,rvs); // put it all back on since it didn't go....
 						}
 #endif
@@ -4056,7 +4064,7 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 						done = 0; // the semicolon implies that there may be something after...
 					}
 					else {
-						argv = simple_command(argv, 0, pipefd[0], orig_out, orig_err, 0);
+						argv = simple_command(argv, 0, pipefd[0], orig_out, orig_err, FOREGROUND);
 					}
 
 					DEPARTURE("");
@@ -4105,7 +4113,7 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 
 #endif			
 		
-		cs_execute(make_background,cmd, in, out, err, NULL);
+		cs_execute(make_background, 0,cmd, in, out, err, NULL);
 	}
 
 	delete_string_array(cmd);
@@ -4130,7 +4138,7 @@ char **linear_chain(char **argv, int excmd, int in, int out, int err) {
 	ENTRY("");
 	
 	if (argv && argv[0]) {
-		argv = simple_command(argv, excmd, in, out, err, 0); // in, out, and err may be modified by simple_command to take piping into account. 
+		argv = simple_command(argv, excmd, in, out, err, FOREGROUND); // in, out, and err may be modified by simple_command to take piping into account. 
 		
 		if (argv && argv[0]) { 
 //			fprintf(stderr,"%p %p: %s\n", argv, *argv, *argv);
@@ -5236,9 +5244,6 @@ void initialise_interpreter(int argc, char **argv) {
   //  sexp_define_foreign(ctx,env,"word-expand",1,sexp_wordexp);
 
 }
-
-
-
 
 
 /*--- Outermost layer -- interfacing with chibi, running scripts & terminals  */

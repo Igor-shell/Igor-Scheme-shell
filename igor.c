@@ -56,12 +56,13 @@
 #include "chibi/eval.h"
 #include <stdio.h>
 
+/* These externs are all defined in external-support  */
 extern sexp ctx, env; 
 
 extern void preignition();
 extern void initialise_interpreter();
-sexp igor_ctx();
-sexp igor_env();
+extern sexp igor_ctx();
+extern sexp igor_env();
 
 extern int igor(int argc, char **argv);
 extern void close_up_shop();
