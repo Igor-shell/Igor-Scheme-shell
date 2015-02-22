@@ -71,28 +71,72 @@ quote is a scheme symbol
 
 
 2014-08-13-20:34:15 Mysteriously exits (probably something to do with files closing)
-
 RESOLVED 2014-08-13-20:34:53 pipes are *buggered*
 
 2014-08-13-20:35:07 Doesn't appear to be a terminal (more(1) just cats)
-						  2014-11-26-16:06:01  Doesn't "cat" now, but never gets terminal input
-						  							  "ls -lrt | more"
-													  pauses, but never continues.
-													  
+|						  2014-11-26-16:06:01  Doesn't "cat" now, but never gets terminal input
+|						  							  "ls -lrt | more"
+|													  pauses, but never continues.
+|													  
 RESOLVED 2014-08-13-20:36:33 Doesn't dispatch scheme expressions at the moment.
 
 
 
 
 2014-11-26-15:47:45  Things happen in odd orders with sets of s-expressions:
+|	 Yeth? (begin (display 1)(display 2)(display 3)(newline))
+|	 123
+|
+|	 Yeth? (display 1)(display 2)(display 3)(newline)
+|	 321Yeth? 
+|
+|	 The second is "backwards" -- suggests that there is a recursive component to evaluating
+|	 things that I probably don't want
+|
+|
+|    ** 2014-12-29-09:40:20 Scheme expressions aren't mixing with commands and conditionals
+|
+|	 Yeth? #t || echo yes
+|	 Yeth? #f || echo yes			
+|
+|	 ***** Scheme expressions *are* mixing with commands and conditionals, I misdiagnosed 
+|	 ***** things. Here the # is treated like the beginning of a comment line. Noting that
+|	 ***** '(or)' => #f   and that  '(and') -> #t,
+|
+|	 Yeth? (or) || echo Yes
+|	 Yeth? (or) && echo Yes
+|	 Yes
+|	 Yeth? (and) && echo Yes
+|	 Yes
+|	 Yeth? (and) || echo Yes
+|	 Yeth? 
+|
+|	 which *is* backwards, but never mind.
+|
+RESOLVED 2014-12-30-19:24:25
+
+2014-12-??-??:??:?? Wonkiness in order of execution
+
+    Yeth? (display 1)(display 2)(display 3)(newline)
+
+	 321Yeth?
 	 Yeth? (begin (display 1)(display 2)(display 3)(newline))
 	 123
+	 Yeth?
 
-	 Yeth? (display 1)(display 2)(display 3)(newline)
-	 321Yeth? 
-
-
-
+	 Probably some odd backwards recursion.....
+	 
 
 
+** 2014-12-30-15:06:51 Need to make it so that single quotes are treated like quotes on *commands*
+						  but recognised as parts of s-expressions when they are either part of a
+						  quoted list or embedded in a scheme expression. Commands like
 
+						        'command-name with embedded spaces' 
+						  
+						  ought to work. Currently
+
+						        'cat' /etc/issue 
+
+						  will cause a segv.
+						  

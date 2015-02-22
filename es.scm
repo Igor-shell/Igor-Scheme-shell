@@ -18,6 +18,15 @@
 
 (dnldbg "Loading es.scm ")
 
+
+(define (filter pred lst)
+   (if (or (not (pair? lst)) (null? lst))
+       '()
+       (if (pred (car lst))
+           (cons (car lst) (filter pred (cdr lst)))
+           (filter pred (cdr lst)))))
+
+
 (define-syntax verbose-let*
   (syntax-rules ()
     ((verbose-let* () body1 body2 ...)
@@ -52,6 +61,7 @@
 
 (define (in-range v mn mx)
   (and (<= mn v) (<= v mx)))
+
 
 (define linux-errno  '(
 							  (1 eperm "Operation not permitted")
@@ -223,6 +233,20 @@
   )
 
 
+(define (error-symbol-by-num errnum)
+  (let ((e (assoc errnum linux-errno)))
+	 (if e (cadr e) #f)))
+
+(define (error-num-by-symbol errsym)
+  (let ((e (filter (lambda (x) (equal? errsym (cadr x))) linux-errno)))
+	 (if (or (not e) (null? e)) #f (caar e) #f)))
+
+(define (error-descr-by-num errnum)
+  (let ((e (assoc errnum linux-errno)))
+	 (if e (caddr e) #f)))
+
+
+
 (define (arch-signal arch slist)
   (let ((a (cond ((member arch '(alpha sparc)) 0) ((member arch '(x86 arm generic * #t)) 1) ((member arch '(mips)) 2) (#t 1))))
 	 (map
@@ -235,7 +259,7 @@
 
 (define (signal-lookup n . arch) (set! arch (if (pair? arch) (car arch) '*))
   (let ((r (filter (lambda (x) (or (equal? n (cadr x)) (and (pair? (cadr x)) (member n (cadr x)))))	 (arch-signal arch *linux-signal-map*))))
-	 (if (= (length r) 1)
+	 (if (= (length r) 1) 
 		  (car r)
 		  '()) ))
 
