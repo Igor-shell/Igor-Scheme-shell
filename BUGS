@@ -63,21 +63,26 @@
 
 
 The command
-    Yeth? 'abc
+|    Yeth? 'abc
 
 doesn't print the symbol 'abc We certainly need to check strings like
 "Run Me" for their presence, but (by fiat) we insist that a single
 quote is a scheme symbol
+
+Now quotes are treated as indicators that the text is to be quoted
+SUPERSEDED 2015-02-23-17:50:56 
+
+
 
 
 2014-08-13-20:34:15 Mysteriously exits (probably something to do with files closing)
 RESOLVED 2014-08-13-20:34:53 pipes are *buggered*
 
 2014-08-13-20:35:07 Doesn't appear to be a terminal (more(1) just cats)
-|						  2014-11-26-16:06:01  Doesn't "cat" now, but never gets terminal input
-|						  							  "ls -lrt | more"
-|													  pauses, but never continues.
-|													  
+						  2014-11-26-16:06:01  Doesn't "cat" now, but never gets terminal input
+						  							  "ls -lrt | more"
+													  pauses, but never continues.
+													  
 RESOLVED 2014-08-13-20:36:33 Doesn't dispatch scheme expressions at the moment.
 
 
@@ -116,20 +121,24 @@ RESOLVED 2014-08-13-20:36:33 Doesn't dispatch scheme expressions at the moment.
 RESOLVED 2014-12-30-19:24:25
 
 2014-12-??-??:??:?? Wonkiness in order of execution
+|
+|    Yeth? (display 1)(display 2)(display 3)(newline)
+|
+|	 321Yeth?
+|	 Yeth? (begin (display 1)(display 2)(display 3)(newline))
+|	 123
+|	 Yeth?
+|
+|	 Probably some odd backwards recursion.....
 
-    Yeth? (display 1)(display 2)(display 3)(newline)
-
-	 321Yeth?
-	 Yeth? (begin (display 1)(display 2)(display 3)(newline))
-	 123
-	 Yeth?
-
-	 Probably some odd backwards recursion.....
-	 
-
+The problem only occurred when there was no spaces between the s-expressions, and the reason
+was that it was being evaluated in evaluate_scheme_expression as something like
+(display-string %s) .... changed to (display-string ((lambda () %s))) and evaluation is as it
+ought to be.
+RESOVED 2015-02-23-17:45:39 	 
 
 ** 2014-12-30-15:06:51 Need to make it so that single quotes are treated like quotes on *commands*
-						  but recognised as parts of s-expressions when they are either part of a
+
 						  quoted list or embedded in a scheme expression. Commands like
 
 						        'command-name with embedded spaces' 
@@ -139,7 +148,13 @@ RESOLVED 2014-12-30-19:24:25
 						        'cat' /etc/issue 
 
 						  will cause a segv.
+RESOLVED 2015-02-23-17:49:10 
+
 						  
 2015-02-22-11:21:16 #f produces a true value
-| the string length in the strncmp(cp,"#t...) was 1, not 2 in the tokening code
+the string length in the strncmp(cp,"#t...) was 1, not 2 in the tokening code
 RESOLVED 2015-02-22-21:30:10 
+
+2015-02-22-21:32:41 It looks like things are being fired off in the background by default.
+The problem was that make_background was treated as boolean when what was passed was a bit flag.
+RESOLVED 2015-02-23

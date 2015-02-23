@@ -510,6 +510,7 @@ sexp current_input, current_output, current_error;
 sexp bool_true;
 
 int NOTIFY_BG_PID = 1, NOTIFY_BG_EXIT = 0, NOTIFY_JOB_SIG = 0, NOTIFY_JOB_SUSP = 0, NOTIFY_JOB_STOP = 1;
+int NOTIFY_RETURN = 0;
 
 char *error_message = NULL;
 
@@ -698,7 +699,33 @@ char *supporting_initialisation[] = {
 #endif
 	NULL};
 
+
+#define EMPTY 0
+#define SCHEME_EXPRESSION 1
+#define FOREGROUND (SCHEME_EXPRESSION << 1)
+#define BACKGROUND (FOREGROUND << 1)
+#define SUSPENDED (BACKGROUND << 1)
+#define BLOCKED_ON_INPUT (SUSPENDED << 1)
+#define EXITED (BLOCKED_ON_INPUT << 1)
+#define TERMINATED ( EXITED<< 1)
+#define ABORTED (TERMINATED << 1)
+
+
+
 /*-- Functions and procedures  */
+
+void print_status_string(int status) {
+	fprintf(stderr," [%d] ", status);
+	if (!status) fprintf(stderr," EMPTY ");
+	if (status & SCHEME_EXPRESSION) fprintf(stderr," SCHEME_EXPRESSION ");
+	if (status & FOREGROUND) fprintf(stderr," FOREGROUND ");
+	if (status & BACKGROUND) fprintf(stderr," BACKGROUND ");
+	if (status & SUSPENDED) fprintf(stderr," SUSPENDED ");
+	if (status & BLOCKED_ON_INPUT) fprintf(stderr," BLOCKED_ON_INPUT ");
+	if (status & EXITED) fprintf(stderr," EXITED ");
+	if (status & TERMINATED) fprintf(stderr," TERMINATED ");
+	if (status & ABORTED) fprintf(stderr," ABORTED ");
+}
 
 char *errsym(int num) {
 	int i;
@@ -2801,7 +2828,7 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 	sexp_gc_preserve2(ctx, presult, result);
 
 	if (!Sexpr) return NULL;
-	fprintf(stderr,"[[%p | %s]]\n", Sexpr, Sexpr);
+	//fprintf(stderr,"[[%p | %s]]\n", Sexpr, Sexpr);
 
 	if (strchr("(", *Sexpr)) {
 		char *t = jump_sexp(Sexpr, '\\');
@@ -2818,7 +2845,8 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 
 
 //#define START_EVAL_BLOCK "   (let ((rslt #f)) (set! rslt (display-to-string %s))" 
-#define START_EVAL_BLOCK " " "  (let* ((rslt (display-to-string %s)))" 
+//#define START_EVAL_BLOCK " " "  (let* ((rslt (display-to-string %s)))" 
+#define START_EVAL_BLOCK " " "  (let* ((rslt (display-to-string ((lambda () %s)) )))" 
 //#define START_EVAL_BLOCK " " "  (let ((exp (quote %s))) (let ((rslt (display-to-string exp)))" 
 //#define START_EVAL_BLOCK " " "  (let* ((exp (quote %s)) (rslt (display-to-string exp)))" 
 
@@ -2829,7 +2857,7 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 		sexpr
 		);
 
-	fprintf(stderr,"EVALUATING %s\n", wsexpr);
+	//fprintf(stderr,"EVALUATING %s\n", wsexpr);
 	
 	presult = sexp_eval_string(ctx, wsexpr, -1, ENV);
 	result = check_exception(emit, ctx, presult, "There was an error in:", sexpr);
@@ -2980,6 +3008,7 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 
 	ENTRY("");
 	
+	//print_status_string(status);
 
 #define ifewsxz if  // Westley, the Dread Pirate Rabbits added the "ewsxz".  
 	                    // If one can't have input into the C standard just because one
@@ -3019,10 +3048,11 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 			if (input != 0) instring = read_all(input);
 			Close(input);
 
-			fprintf(stderr,"Running: %s\n",argv[i]);
-			fprintf(stderr,"Consumes: %s\n",inputstring);
+//
+//			fprintf(stderr,"Running: %s\n",argv[i]);
+//			fprintf(stderr,"Consumes: %s\n",inputstring);
 			outstring = evaluate_scheme_expression(0, argv[i], instring);
-			fprintf(stderr,"Produces: %s\n",outstring);
+//			fprintf(stderr,"Produces: %s\n",outstring);
 		
 			
 			if (outstring) {
@@ -3054,7 +3084,7 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 				//fprintf(stderr,"%p = %s\n",outstring);
 			}
 		}
-		fprintf(stderr,"evaluated scheme expression\n");
+		//fprintf(stderr,"evaluated scheme expression\n");
 	}
 	else { // must be a command
 		TRACK;
@@ -3092,15 +3122,18 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 
 			setpgid(procid, procid); // make the child a process group leader
 
+			//print_status_string(status);
+
 			if (procid) {
 				char bgpid[80];
 				sprintf(bgpid,"%d",procid);
 				igor_set(ctx,"$!", bgpid);
 			}
 			
-			cid = waitpid(procid, &stats, WNOHANG);
-			if (cid)
-
+			
+			if (status & BACKGROUND) cid = waitpid(procid, &stats, WNOHANG);
+			else cid = waitpid(procid, &stats, 0);
+			
 /*
 			fprintf(stderr,"RETURNED %d:%d:%d\n", procid, cid, stats);
 			fprintf(stderr,"WIFEXITED = %d\n", WIFEXITED(stats));
@@ -3152,11 +3185,13 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 			}
 			rtv = !rtv;
 			
-			if (rtv) {
-				fprintf(stderr,"return is true (%d)\n", rtv);
-			}
-			else {
-				fprintf(stderr,"return is false (%d)\n", rtv);
+			if (NOTIFY_RETURN) {
+				if (rtv) {
+					fprintf(stderr,"return is true (%d)\n", rtv);
+				}
+				else {
+					fprintf(stderr,"return is false (%d)\n", rtv);
+				}
 			}
 		}
 		else if (procid == 0) { // this is the child
@@ -3647,14 +3682,14 @@ char **tokenise_cmdline(char *cmdline) {
 				}
 
 				else if (!strncmp(cp,"#t",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
-					fprintf(stderr,"############### true\n");
+					//fprintf(stderr,"############### true\n");
 					argv[argc++] = strdup("#t");
 					argv[argc] = 0;
 					cp += 2;
 					i = 0;
 				}
 				else if (!strncmp(cp,"#f",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
-					fprintf(stderr,"############### false\n");
+					//fprintf(stderr,"############### false\n");
 					argv[argc++] = strdup("#f");
 					argv[argc] = 0;
 					cp += 2;
@@ -3732,9 +3767,9 @@ char **simple_sexpression(char **argv, int in, int out, int err) {
 	return argv+1;
 }
 
-/*----- char **simple_command(char **argv, int excmd, int in, int out, int err, int force_bg) {  */
+/*----- char **simple_command(char **argv, int excmd, int in, int out, int err, int status) {  */
 
-char **simple_command(char **argv, int excmd, int in, int out, int err, int force_bg) {
+char **simple_command(char **argv, int excmd, int in, int out, int err, int status) {
 	int done = 0;
 	int i;//, fN = 0;
 	int infd = -1, outfd = -1, errfd = -1;
@@ -3748,8 +3783,10 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 	if (!argv) return NULL;
 	// N is the number of non-null args, the number of elements is actually N+1
 
-	if (force_bg) make_background = BACKGROUND | (make_background & ~FOREGROUND);
+
+	if (status & BACKGROUND) make_background = BACKGROUND | (make_background & ~FOREGROUND);
 	
+	//fprintf(stderr, "Forcing background = %d", make_background); print_status_string(make_background);
 
 	if (in >= 0) infd = in;
 	if (out >= 0) outfd = out;
@@ -4028,6 +4065,11 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 					abort();
 				}
 				
+				//fprintf(stderr,"PIPE: ");
+				//print_status_string(make_background);
+				//fprintf(stderr,"\n");
+				
+
 				// Now fire off the leading program and the following program in the bg
 				begin {
 //					int  r;
@@ -4050,14 +4092,14 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int forc
 						if (make_errpipe) err = orig_err;
 
 						if (rvs == True || sexp_equalp(ctx,rvs,True)) {
-							argv = simple_command(argv, excmd, pipefd[0], orig_out, orig_err, BACKGROUND); // force the following program into the background
+							fprintf(stderr,"~~~~ pipe rvs was true\n");
+							argv = simple_command(argv, excmd, pipefd[0], orig_out, orig_err, make_background & ~FOREGROUND | BACKGROUND); // force the following program into the background
 						}
-#if 1
 						else {
 							argv = simple_command(argv, 0, pipefd[0], orig_out, orig_err, FOREGROUND);
 							//push_rv_sexp(ctx,rvs); // put it all back on since it didn't go....
 						}
-#endif
+
 						Close(pipefd[0]);
 
 						STATUS(r);
@@ -4357,8 +4399,26 @@ void run_command_epilogue(char *cmds, sexp rv) {
 
 void update_internal_c_variables() {
 	char *s = NULL;
-	s = getenv("TRACK_EXECV");
+	s = getenv("IGOR_TRACK_EXECV");
 	if (s) track_execv = atoi(s);
+
+	s = getenv("IGOR_NOTIFY_RETURN");
+	if (s) NOTIFY_RETURN = atoi(s);
+
+	s = getenv("IGOR_NOTIFY_BG_PID");
+	if (s) NOTIFY_BG_PID = atoi(s);
+	
+	s = getenv("IGOR_NOTIFY_BG_EXIT");
+	if (s) NOTIFY_BG_EXIT = atoi(s);
+	
+	s = getenv("IGOR_NOTIFY_JOB_SIG");
+	if (s) NOTIFY_JOB_SIG = atoi(s);
+	
+	s = getenv("IGOR_NOTIFY_JOB_SUSP");
+	if (s) NOTIFY_JOB_SUSP = atoi(s);
+	
+	s = getenv("IGOR_NOTIFY_JOB_STOP");
+	if (s) NOTIFY_JOB_STOP = atoi(s);
 }
 
 
