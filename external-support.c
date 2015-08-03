@@ -91,7 +91,8 @@
 
 /*---   Identification defines, and default names  */
 
-//#define TC
+// add terminal controller 
+#define TC 1
 
 
 #define IGOR_VERSION "(igor 0 2 \"Kibble Pie!\")"
@@ -154,6 +155,7 @@
 /***** Indenting macro stuff  *****/
 
 extern void  _dump_rs();
+
 
 #if 0   /********************************* TRACKING  BEGINS HERE **************************************/
 #define __INDENT_SIZE__ 3
@@ -230,7 +232,7 @@ int ___INDENT_NEST__ =  0;
 
 //#define NDEBUG 1
 
-#define Cprintf(format, args...) printf(format, ##args) // execution in command-loop
+//#define Cprintf(format, args...) printf(format, ##args) // execution in command-loop
 //#define Iprintf(format, args...) printf(format, ##args) // execution path from the arguments supplied to igor
 //#define Dprintf(format, args...) printf(format, ##args) // debugging the tokenising
 //#define DPTprintf(format, args...) printf(format, ##args) // processing tokens
@@ -276,7 +278,7 @@ int ___INDENT_NEST__ =  0;
 #define eat_white_space(p) {while (p && *p && isspace(*p)) p++;}
 
 
-#define adjust_fd(which,wnum)	{if (which >= 0 && which != wnum) {if (dup2(which,wnum) < 0) {perror("Error dup2ing " #which);exit(EBADF);}}}
+#define dup_fd(tobeassigned,desiredfd)	{if (tobeassigned >= 0 && tobeassigned != desiredfd) {if (dup2(tobeassigned,desiredfd) < 0) {perror("Error dup2ing " #tobeassigned);exit(EBADF);}}}
 
 /*--- type declarations  */
 
@@ -513,8 +515,8 @@ extern sexp execute_command_string(char *cmds);
 
 void close_up_shop();
 sexp run_source_file(char *filename);
-void run_command_prologue(char *cmds);
-void run_command_epilogue(char *cmds, sexp rv);
+void run_command_prologue(char **cmds);
+void run_command_epilogue(char **cmds, sexp rv);
 //sexp run_commands(cmd_t *cmd);
 //cmd_t *process_token_list(char **Argv, int in, int out,int err);
 
@@ -868,9 +870,9 @@ int push_rv_sexp(sexp ctx, sexp rv) {
 		rsstack = (sexp *)realloc(rsstack, (sizeof(int) * (rsp + RSPS)));
 	}
 
-
-
-	if (is_false(ctx,rv)) ristack[rsp] = 0;
+	if (is_false(ctx,rv)) {
+	   ristack[rsp] = 0;
+   }
 	else if (sexp_fixnump(rv)) {
 		ristack[rsp] = sexp_unbox_fixnum(rv);
 	}
@@ -1179,7 +1181,7 @@ char *string_array_as_string(int argc, char **argv) {
 	int i, n;
 	char *s = NULL;
 
-	if (argc > 0) {
+	if (argc >= 0) {
 		for (i = n = 0; i < argc; i++) {
 			n += 1 + strlen(argv[i]);
 		}
@@ -1193,6 +1195,22 @@ char *string_array_as_string(int argc, char **argv) {
 			strcat(s, argv[i]);
 		}
 	}
+	else {
+		argc = 0;
+		for (i = n = 0; argv && argv[i]; i++) {
+			n += 1 + strlen(argv[i]);
+			argc++;
+		}
+		s = (char *)malloc(n);
+
+		*s = 0;
+		strcat(s, argv[0]);
+
+		for (i = 1; i < argc; i++) {
+			strcat(s, " ");
+			strcat(s, argv[i]);
+		}
+	}	
 	return s;
 }
 
@@ -1789,7 +1807,6 @@ int is_sexp(char *s) {
 	if (s && starts_sexp(s)) {
 		parens = sexpr_depth(parens, s);
 		if (parens) n = strlen(parens);
-		//fprintf(stderr,"--- %s | %s ---\n", s, parens);
 		Free(parens);
 		n = !n;
 	}
@@ -2094,7 +2111,6 @@ char **wordexp_string_array(char *str) {
 		return arry;
 	}
 	else {
-		//fprintf(stderr,"bad expansion for \"%s\"\n", str);
 		return calloc(1,sizeof(char *)); // Returning null just doesn't work.
 	}
 }
@@ -2267,16 +2283,12 @@ char *completed_path(char *s) { // Don't free s, the calling routine needs to de
 		expanded = sexp_apply(ctx, p, r);		
 		
 #if 0
-		fprintf(stdout,"%s --> %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  ", s);
 		fflush(stdout);
 
 		sexp_writeln(ctx,expanded,sexp_current_output_port(ctx), 0);
 #endif
 
 		sexpr = (sexp_stringp(expanded) ? strdup(sexp_string_data(expanded)) : NULL);
-
-		//fprintf(stderr, ">>>>>> %s\n", sexpr);
-		//Free(t);
 
 		if (t && t != s) Free(t);
 
@@ -2653,8 +2665,6 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 	sexp_gc_var3(result, inexpr, outexpr);
 	sexp_gc_preserve3(ctx, result, inexpr, outexpr);
 
-   //fprintf(stderr,"Entering scm_func %s\n", *argv);
-
 	k = 0;
 	
 	if (!argv || !argv[0] || !*argv[0]) {
@@ -2703,10 +2713,6 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 			q = evaluate_scheme_expression(1, p, inputstring); // Sets the ERRCON state appropriately
 		}
 		
-		//fprintf(stderr,"*** loop %d: %s ## %s\n", k, q, s);
-
-		//result = sexp_eval_string(ctx,"*last_igor_eval*",-1,ENV);
-
 		if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
 			if (q && *q) {
 				int nq = strlen(q);
@@ -2732,7 +2738,6 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 	}
 
 	if (ERRCON != SEXP_UNDEF && ERRCON != SEXP_VOID && !sexp_exceptionp(ERRCON)) {
-		fprintf(stderr,"*** loop %d: %s\n", k, q);
 		if (repl_write >= 0 && q) {
 			write(out,q,strlen(q));
 			k++;
@@ -2741,8 +2746,6 @@ sexp scm_func(char **argv, int in, int out, char *inputstring) {
 
 	if (k > 0) write(out, "\n", 1);
 
-	//fprintf(stderr,"scm_func finished evaluating %s\n", sline);
-	
 	Free(sline);
 
 	sexp_gc_release3(ctx);
@@ -2806,8 +2809,6 @@ char *read_line(FILE *f, char *prompt_function) {
 		Free(prompt);
 	}
 	else {
-		//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
-
 		if (k < 0) k = n1 + n2;
 		cmd = NULL;
 
@@ -2863,8 +2864,6 @@ char *get_commandline(FILE *f, char *buffer) {
 	char *sexpcontprompt = "(prompt-for-sexp-continuation)";
 	char *remindprompt = "(prompter)";
 
-	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
-
 	if (!buffer) {
 		prompt = stdprompt;
 		buffer = (char *)malloc(1);
@@ -2895,11 +2894,6 @@ char *get_commandline(FILE *f, char *buffer) {
 			prompt = contprompt;
 		}
 		
-		
-
-		//fprintf(stderr,"[%s: %s]  cse=%d  sdepth = %s depth = %d\n", prompt, current_line, collecting_s_exp, sdepth, depth);
-
-
 		Note("Top of loop: I've read the line and set the prompt");
 
 		if (current_line && !*buffer) {
@@ -3064,7 +3058,7 @@ void signalHandler_child(int p)
 		else if (WIFSIGNALED(status)) {                                  // the job dies because of a signal
 			if (NOTIFY_JOB_SIG) printf("\n[%d]+  KILLED\n", pid); // inform the user
 		} 
-#if defined(TC)
+#if defined(TC) && TC
 		tcsetpgrp(ttyfd, ttypgid);
 #endif		
 	}
@@ -3110,7 +3104,7 @@ void signalhandler(int p) {
 
 	pid = waitpid(WAIT_ANY, &exitval, WUNTRACED | WNOHANG); // intercept the process that sends the signal
 
-#if defined(TC)
+#if defined(TC) && TC
 	if (pid > 0) {                                                                          // if there are information about it
 		tcsetpgrp(0, igor_pgid);
 	}
@@ -3127,8 +3121,8 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	char *cmds = NULL;
 	char **tokenise_cmdline(char *cmdline);
 //	cmd_t *process_token_list(char **Argv, int in, int out,int err);
-	void run_command_prologue(char *cmds);
-	void run_command_epilogue(char *cmds, sexp rv);
+	void run_command_prologue(char **cmds);
+	void run_command_epilogue(char **cmds, sexp rv);
 	//sexp run_commands(cmd_t *cmd);
 //	int exitval;
 	int i  = 0, k = 0;
@@ -3139,11 +3133,6 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 
 	rv = SEXP_TRUE;
 	ENTRY("");
-#if 0
-	for (i = 0; argv && argv[i]; i++) {
-		fprintf(stderr,"in eca[%d] %s\n", i, argv[i]);
-	}
-#endif
 
 
 	if (!argv || !*argv) {
@@ -3163,11 +3152,8 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 		strcat(cmds, argv[i]);
 	}
 
-//	C = process_token_list(argv,0,1,2);
-//	C->cmd = cmds;
-
 	// Call to run-command-prologue
-	run_command_prologue(cmds);
+	//run_command_prologue(cmds);
 
 	//fprintf(stderr,"EXECUTING: %s\n", cmds);
 	if (is_sexp(cmds)) status |= SCHEME_EXPRESSION;
@@ -3176,7 +3162,7 @@ sexp execute_command_array(char **argv) { // DOES NOT FREE ANYTHING
 	rv = rss();
 	//if (sexp_booleanp(rv)) stderr_print_t_f(ctx,rv);
 
-	run_command_epilogue(cmds, rv);
+//	run_command_epilogue(cmds, rv);
 
 	DEPARTURE("");
 	sexp_release_object(ctx,rv);
@@ -3192,8 +3178,6 @@ sexp execute_command_string(char *cmds) { // The string cmds is freed!
 	char **tokenise_cmdline(char *cmdline);
 	char **argv = 0;
 	sexp rv = SEXP_ZERO;;
-
-	//fprintf(stderr,"ecs %s\n", cmds);
 
 	ENTRY("");
 	argv = tokenise_cmdline(cmds);
@@ -3273,7 +3257,6 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 	sexp_gc_preserve2(ctx, presult, result);
 
 	if (!Sexpr) return NULL;
-	//fprintf(stderr,"[[%p | %s]]\n", Sexpr, Sexpr);
 
 	if (strchr("(", *Sexpr)) {
 		char *t = jump_sexp(Sexpr, '\\');
@@ -3302,7 +3285,6 @@ char *evaluate_scheme_expression(int emit, char *Sexpr,  char *inputstring) { //
 		sexpr
 		);
 
-	//fprintf(stderr,"EVALUATING %s\n", wsexpr);
 	
 	presult = sexp_eval_string(ctx, wsexpr, -1, ENV);
 	result = check_exception(emit, ctx, presult, "There was an error in:", sexpr);
@@ -3339,7 +3321,6 @@ sexp sexp_evaluate_scheme_expression(int emit, char *Sexpr) { // This returns an
 	sexp_gc_preserve1(ctx, result);
 
 	if (!Sexpr) return NULL;
-	//fprintf(stderr,"[[%p | %c]]\n", Sexpr, *Sexpr);
 
 	if (strchr("(", *Sexpr)) {
 		char *t = jump_sexp(Sexpr, '\\');
@@ -3370,11 +3351,9 @@ char *write_to_string(sexp sexpr) { // This returns an allocated string which ou
 	char *s;
 	
 	TRACK;
-	sexp_write(ctx,sexpr,sexp_current_error_port(ctx));
+	//sexp_write(ctx,sexpr,sexp_current_error_port(ctx));
 	s = strdup(sexp_string_data(sexp_write_to_string(ctx, sexpr)));
 
-	//fprintf(stderr,"   [write_to_string --> %s]\n", s);
-	
 	begin {
 		return s;
 		
@@ -3424,12 +3403,6 @@ char *dispatch_scheme(char **argv, int input, int output, int error, char *input
 	int i;
 	char *ss = NULL;
 
-#if 0
-	fprintf(stderr,"Dispatching");
-	for (i = 0; argv && argv[i]; i++) fprintf(stderr," %s", argv[i]);
-	fprintf(stderr,"\n");
-#endif
-	
 	for (i = 0; argv[i]; i++) {
 		if (ss) Free(ss);
 		if (is_sexp(argv[i]) || (argv[i][0] == '$' && argv[i][1] == '(')) {
@@ -3467,27 +3440,14 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 		TRACK;
 		push_rv_sexp(ctx,SEXP_TRUE); // "zero" is success.....
 		DEPARTURE("");
-		//dump_rs();
 		return;             // it's ok to try and run an empty process ... it just doesn't do anything
 	}
 
-
-
-
-//	if (input < 0) input = IN;
-//	if (output < 0) output = OUT;
-//	if (error < 0) error = ERR;
-
-	//fprintf(stderr,"========= ");
-	//print_string_array(stderr,argv,-1);
-
 	if (!strcmp(*argv, "#f") || (!strcmp(*argv,"false") || (strlen(*argv) > 6&& !strcmp((*argv + strlen(*argv) - 6),"/false")))) {
-		//fprintf(stderr,"=== got a false\n");
 		push_rv_sexp(ctx,SEXP_FALSE);
 		rtv  = 0;
 	}	
 	else if (!strcmp(*argv, "#t") || (!strcmp(*argv,"true") || (strlen(*argv) > 5	&& !strcmp((*argv + strlen(*argv) - 5),"/true")))) {
-		//fprintf(stderr,"=== got a true\n");
 		push_rv_sexp(ctx,SEXP_TRUE);
 		rtv = 1;
 	}	
@@ -3506,6 +3466,11 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 						Free(argv[i]);
 						argv[i] = ss;
 					}
+				}
+				else {
+					char *t = argv[i];
+					argv[i] = word_expand_string(t);
+					Free(t);
 				}
 			}
 		}
@@ -3530,6 +3495,7 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 			if (input != 0) instring = read_all(input);
 			Close(input);
 
+			
 			outstring = evaluate_scheme_expression(0, argv[i], instring);
 			
 			if (outstring) {
@@ -3549,19 +3515,13 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 			//else fprintf(stderr,"\nNo output string for [%s]!\n", argv[i]);
 		}
 
-		if (output == 1 || error == 2) {
+		if (output == 1 || error == 2 || !outstring) {
 			TRACK;
 			push_rv_sexp(ctx,SEXP_TRUE); // int zero is "true"
 		}
 		else {
-			TRACK;
-			if (!outstring) push_rv_sexp(ctx,SEXP_TRUE);
-			else {
-				push_rv_str(ctx,outstring);
-				//fprintf(stderr,"%p = %s\n",outstring);
-			}
+			push_rv_str(ctx,outstring);
 		}
-		//fprintf(stderr,"evaluated scheme expression\n");
 	}
 	else  { // must be a command
 		TRACK;
@@ -3589,6 +3549,8 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 				
 			//print_status_string(status);
 				
+			
+
 			if (procid) {
 				char bgpid[80];
 				sprintf(bgpid,"%d",procid);
@@ -3606,12 +3568,11 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
   if (WIFSIGNALED(stats)) {
   fprintf(stderr,"WIFSIGNALED = %d\n", WTERMSIG(stats));
   fprintf(stderr,"WCOREDUMP = %d\n", WCOREDUMP(stats));
-  }
 */
 
-				
 			if (WIFEXITED(stats)) {
 				rtv = WEXITSTATUS(stats);
+
 				if (rtv == 0) {
 					push_rv_sexp(ctx,SEXP_TRUE); // Finised successfully
 					rtv = 1;
@@ -3644,7 +3605,6 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 				rtv = 0;
 			}
 			else {
-				fprintf(stderr,"Unknown signal? %d\n", rtv);
 				push_rv_sexp(ctx,SEXP_FALSE);
 				rtv = 0;
 			}
@@ -3662,13 +3622,12 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 			int n = 0;
 			fflush(stderr);
 
-			adjust_fd(input,0);
-			adjust_fd(output,1);
-			adjust_fd(error,2);
-
-			Close(input);
-			Close(output);
-			Close(error);
+			dup2(input,0);
+			if (input != 0) Close(input);
+			dup2(output,1);
+			if (output != 1) Close(output);
+			dup2(error,2);
+			if (error != 2) Close(error);
 
 			Dprintf("Child (%s) about to exec\n",cmd);
 			signal(SIGTERM, SIG_DFL);
@@ -3680,9 +3639,9 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 
 			usleep(2000);// fixes a synchronization bug. Needed for short commands like ls according to the code from bdshell
 
-#if 0 && defined(TC)
+#if defined(TC) && TC
 			if (status & FOREGROUND) tcsetpgrp(ttyfd, getpid());
-//			else if (NOTIFY_BG_PID && (status & BACKGROUND)) printf("%d\n", (int) getpid());   // inform the user about the new job in bg
+			else if (NOTIFY_BG_PID && (status & BACKGROUND)) printf("%d\n", (int) getpid());   // inform the user about the new job in bg
 			setpgrp();
 #endif
 
@@ -3690,12 +3649,6 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 				char *tcmd = completed_path(cmd);
 
 				if (tcmd && access(tcmd, X_OK) == Ok) {
-//					int q = 0;
-//					for (q = 0; track_execv && argv && argv[q]; q++) {
-//						if (!q) fprintf(stderr,"Executable = %s\n", tcmd);
-//						fprintf(stderr,"arg[%d] = %s\n", q, argv[q]);
-//					}
-
 					if ((n = execv(tcmd, argv)) == -1) {
 						report_error(0, "Failed to run; the program probably lacked permissions or does not exist", cmd);
 					}
@@ -3707,11 +3660,11 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 					exit(n); // if the process doesn't go, we need to dispatch it
 				}
 				else {
-					report_error(0,"Unable to execute program", argv[0]);
-					if (!strcmp(cmd,"#f"))	report_error(0,"The program was not found", cmd);
+					//report_error(0,"Unable to execute program", argv[0]);
+					if (!strcmp(cmd,"#f"))	report_error(0,"Sorry, the program was not found", cmd);
 					else {
-						if (tcmd) report_error(0,"The file was not found in your 'path'", tcmd);
-						else report_error(0,"The file was not found", cmd);
+						if (tcmd) report_error(0,"Sorryy, the file was not found in your 'path'", tcmd);
+						else report_error(0,"Sorry, the file was not found", cmd);
 					}
 					delete_string_array(argv);
 					Free(tcmd);
@@ -3733,7 +3686,6 @@ void cs_execute(int status, int groupleader, char **argv, int input, int output,
 	
 	DEPARTURE("");
 	dump_rs();
-	//fprintf(stderr, "*********** rtv = %d, ristack[%d] = %d\n", rtv, rsp-1, ristack[rsp-1]);
 }
 
 
@@ -4000,14 +3952,12 @@ char **tokenise_cmdline(char *cmdline) {
 #warning this will get #free #trucks wrong
 
 		else if (!strncmp(cp,"#t",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
-					//fprintf(stderr,"=== true\n");
 			argv[argc++] = strdup("#t");
 			argv[argc] = 0;
 			cp += 2;
 			i = 0;
 		}
 		else if (!strncmp(cp,"#f",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
-					//fprintf(stderr,"=== false\n");
 			argv[argc++] = strdup("#f");
 			argv[argc] = 0;
 			cp += 2;
@@ -4123,14 +4073,12 @@ char **tokenise_cmdline(char *cmdline) {
 
 				if (0) {}
 				else if (!strncmp(cp,"#t",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
-					//fprintf(stderr,"=== true\n");
 					argv[argc++] = strdup("#t");
 					argv[argc] = 0;
 					cp += 2;
 					i = 0;
 				}
 				else if (!strncmp(cp,"#f",2) && (!cp[2] || (isprint(cp[2]) && !isspace(cp[2])))) {
-					//fprintf(stderr,"=== false\n");
 					argv[argc++] = strdup("#f");
 					argv[argc] = 0;
 					cp += 2;
@@ -4271,18 +4219,13 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 
 	if (status & BACKGROUND) make_background = BACKGROUND | (make_background & ~FOREGROUND);
 	
-	//fprintf(stderr, "Forcing background = %d", make_background); print_status_string(make_background);
-
 	if (in >= 0) infd = in;
 	if (out >= 0) outfd = out;
 	if (err >= 0) errfd = err;
 	
 	ENTRY("");
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
-	
 	for (i = 0; !done && argv && *argv; i++) {
 		TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 
 		if (!cmd) {
 			cmd = (char **)calloc(1, sizeof(*cmd)); 
@@ -4294,14 +4237,10 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 		if (*argv) {
 			TRACK;
 		   // if we have a redirection, process it appropriately
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
-
-			
 
 			// stdin redirection
 			if (*argv == stdinredir || !strcmp(*argv, stdinredir)) { 
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (infn || infd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Input is already redirected in '");
@@ -4327,7 +4266,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// stdout + stderr redirection
 			else if (*argv == stdouterredir || *argv == stdouterrapp || !strcmp(*argv, stdouterredir) || !strcmp(*argv, stdouterrapp)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (outfn || outfd > -1 || errfn || errfd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Output and Error are already redirected in '");
@@ -4358,7 +4296,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// stdout redirection
 			else if (*argv  == stdoutredir || *argv == stdoutapp || !strcmp(*argv, stdoutredir) || !strcmp(*argv, stdoutapp)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (outfn || outfd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Output is already redirected in '");
@@ -4389,7 +4326,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// stderr redirection
 			else if (*argv == stderredir || *argv == stderrapp || !strcmp(*argv, stderredir) || !strcmp(*argv, stderrapp)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (errfn || errfd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Error output is already redirected in '");
@@ -4420,7 +4356,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// pipe stdout to next program
 			else if (*argv == outpipe || !strcmp(*argv, outpipe)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (outfn || outfd > -1 || errfn || errfd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Output is already redirected in '");
@@ -4446,7 +4381,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// pipe stderr to next program
 			else if (*argv == errpipe || !strcmp(*argv, errpipe)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (outfn || outfd > -1 || errfn || errfd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Error output is already redirected in '");
@@ -4472,7 +4406,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// pipe both stdout and stderr to next program
 			else if (*argv == outerrpipe || !strcmp(*argv, outerrpipe)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				if (outfn || outfd > -1 || errfn || errfd > -1) {
 					report_error(0, "Command redirection error", NULL);
 					fprintf(stderr,"Output or Error is already redirected in '");
@@ -4496,29 +4429,27 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			}
 			else if (*argv == makebg || !strcmp(*argv, makebg)) {
 				TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 				make_background = BACKGROUND | (make_background & ~FOREGROUND);
 				argv++;
 				continue;
 			}
 		}
-//		else fprintf(stderr,"-------------- Done with argv --------------\n");
 		TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 
 		
 		// If it isn't a pipe of some sort, execute the command we have collected and fall back to linear_chain for the next bit 
 		if (!*argv || *argv  == nextsep  || *argv  == andsep  || *argv == orsep || *argv == begblock || *argv == endblock
 			|| !strcmp(*argv, nextsep)  	|| !strcmp(*argv, andsep)  || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) { 
-			//sexp r = SEXP_FALSE;
 			TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 
 			if (excmd) {
-				//int rvi;
+				run_command_prologue(argv);
 				cs_execute(make_background, 0, cmd, in, out, err, NULL);
+				{
+					sexp rvs = rss();
+					run_command_epilogue(argv,  rvs);
+				}
 				if (*argv == nextsep || !strcmp(*argv, nextsep)) pop_rs();
-				//dump_rs();
 			}
 			
 			delete_string_array(cmd);
@@ -4542,7 +4473,6 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 			// cmd should hold all the bits of the command now... dispatch as appropriate
 
 			TRACK;
-	//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
 
 			if (piping) {
 				int orig_out = out, orig_err = err;
@@ -4565,15 +4495,8 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 					abort();
 				}
 				
-				//fprintf(stderr,"PIPE: ");
-				//print_status_string(make_background);
-				//fprintf(stderr,"\n");
-				
-
 				// Now fire off the leading program and the following program in the bg
 				begin {
-//					int  r;
-					
 					// This is the program being piped into
 				
 					if (excmd) {
@@ -4583,7 +4506,7 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 
 						cs_execute(make_background,0, cmd, in, out, err, NULL);
 						rvs = rss(); // we may replace the primary return value with the secondary return value
-						//rvi = rsi();
+
 						pop_rs();
 
 						Close(pipefd[1]);
@@ -4592,17 +4515,13 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 						if (make_errpipe) err = orig_err;
 
 						if (is_true(ctx,rvs)) {
-							//fprintf(stderr,"~~~~ pipe rvs was true\n");
 							argv = simple_command(argv, excmd, pipefd[0], orig_out, orig_err, (make_background & (~FOREGROUND | BACKGROUND))); // force the following program into the background
 						}
 						else if (is_false(ctx,rvs)) {
-							//fprintf(stderr,"~~~~ pipe rvs was false\n");
 							argv = simple_command(argv, 0, pipefd[0], orig_out, orig_err, FOREGROUND);
-							//push_rv_sexp(ctx,rvs); // put it all back on since it didn't go....
 						}
 						else {
 							char *rvss = write_to_string(rvs);
-							//fprintf(stderr,"~~~~ pipe rvs was '%s'\n", rvss);
 							Free(rvss);
 						}
 
@@ -4621,23 +4540,9 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 		}
 
 		else {
-//			int q;
 			piping = 0;
-//			char **ncmd = 0;
-
 			TRACK;
-			//fprintf(stderr,"%s:%d -- %d\n", __FUNCTION__, __LINE__, excmd);
-#if 0
-			fprintf(stderr,"Adding '%s' to array: ", *argv);
-			fprintf_string_array(stderr,-1,cmd);
-			fprintf(stderr,"\n");
-#endif
 			cmd = add_to_string_array(*argv,cmd);
-#if 0
-			fprintf(stderr,"becomes ");
-			fprintf_string_array(stderr,-1,cmd);
-			fprintf(stderr,"\n");
-#endif
 			argv++;
 		}
 	}
@@ -4645,23 +4550,9 @@ char **simple_command(char **argv, int excmd, int in, int out, int err, int stat
 	// Execute command/sexpression here
 
 	if (!excmd) {
-#if 1
-		fprintf(stderr,"Supressing (%d): ", excmd);
-		fprintf_string_array(stderr,-1,cmd);
-		fprintf(stderr,"\n");
-		fprintf(stderr,"make_background = %d, in = %d, out = %d, err = %d\n", make_background, in, out, err);
-#endif
 		// we don't call cs_execute
 	}
 	else {
-#if 1
-		fprintf(stderr,"Executing (%d): ", excmd);
-		fprintf_string_array(stderr,-1,cmd);
-		fprintf(stderr,"\n");
-		fprintf(stderr,"make_background = %d, in = %d, out = %d, err = %d\n", make_background, in, out, err);
-
-#endif			
-		
 		cs_execute(make_background, 0,cmd, in, out, err, NULL);
 	}
 
@@ -4691,7 +4582,6 @@ char **linear_chain(char **argv, int excmd, int in, int out, int err) {
 		argv = simple_command(argv, excmd, in, out, err, FOREGROUND); // in, out, and err may be modified by simple_command to take piping into account. 
 		
 		if (argv && argv[0]) { 
-//			fprintf(stderr,"%p %p: %s\n", argv, *argv, *argv);
 			if (*argv == nextsep || !strcmp(*argv, nextsep)) {
 				TRACK;
 				argv++; // consume ;
@@ -4749,32 +4639,19 @@ char **and_chain(char **argv, int excmd, int in, int out, int err) {
 				dump_rss();
 
 				if (iexcmd && is_true(ctx,rvs)) {
-					//fprintf(stderr,"ONE %s %d\n", rvss, iexcmd );
 					iexcmd = 1;
 				}
 				else if (is_false(ctx,rvs)) {
-					//fprintf(stderr,"ZERO %s %d\n", rvss, iexcmd );
 					iexcmd = 0;
 				}
 				else {
-					//fprintf(stderr,"Didnae get a guid valyoo, %s %d\n", rvss, iexcmd);
 					iexcmd = -1;
 				}
 				
-//				if (!sexp_equalp(ctx,rvs,SEXP_TRUE) || sexp_equalp(ctx,rvs,SEXP_FALSE)) excmd = 0; // we had an error or a false return
-
-				//fprintf(stderr,"AND: %s %s %s\n", excmd? "execute" : "Skip", iexcmd? "iexecute" : "iskip", rvss);
-
 				pop_rs();
 				Free(rvss);
 				
 				argv++; // consume &&
-		
-				//if (!rvi) excmd = 0;
-
-				//fprintf(stderr,"     excmd = %d, iexcmd = %d\n", excmd, iexcmd);
-
-				//argv = and_chain(argv, excmd, in, out, err);
 			}
 			else if (*argv == orsep || *argv == begblock || *argv == endblock || !strcmp(*argv, orsep) || !strcmp(*argv, begblock) || !strcmp(*argv, endblock)) {
 				TRACK;
@@ -4817,11 +4694,8 @@ char **or_chain(char **argv, int excmd, int in, int out, int err) {
 				char *rvss = NULL;
 				TRACK;
 
-				//rvi = rsi();
 				rvs = rss();
 				rvss = write_to_string(rvs);
-
-				//fprintf(stderr,"OR: %s %s\n", excmd? "execute" : "skip", rvss);
 
 				dump_rss();
 
@@ -4832,14 +4706,6 @@ char **or_chain(char **argv, int excmd, int in, int out, int err) {
 				Free(rvss);
 
 				argv++; // consume ||
-				
-				//if (rvi) excmd = 0;
-				//if (rvs != SEXP_FALSE || !sexp_equalp(ctx, rvs, SEXP_FALSE)) excmd = 0;
-				//if (!rvi)  excmd = 1;
-				//else if (rvs == SEXP_FALSE || sexp_symbolp(rvs) || sexp_equalp(ctx, rvs, SEXP_FALSE)) excmd = 1;
-
-				//fprintf(stderr,"    excmd = %d\n", excmd);
-
 			}
 			else if (*argv == begblock || *argv == endblock || !strcmp(*argv,begblock) || !strcmp(*argv,endblock)) {
 				TRACK;
@@ -4915,28 +4781,41 @@ char **command_block(char **argv, int excmd, int in, int out, int err) {
 
 /*---- Routines that have the potential to support *amazing* customisation ... if they work */
 
-void run_command_prologue(char *cmds) {
+void run_command_prologue(char **cmd) {
+	char *cmds;
 	sexp_gc_var2(prologue, str);
 	sexp_gc_preserve2(ctx,prologue, str);
+
+	cmds = string_array_as_string(-1,cmd);
 	str = SEXP_NULL;
 	if (cmds) {
 		str = sexp_cons(ctx, sexp_c_string(ctx,cmds, -1), str);
 		prologue = sexp_get_procedure(ctx, env, IGOR_COMMAND_PROLOGUE);
 		if (sexp_procedurep(prologue)) sexp_apply(ctx, prologue, str);
 	}
+	Free(cmds);
 	sexp_gc_release2(ctx);
 }
 
-void run_command_epilogue(char *cmds, sexp rv) {
+void run_command_epilogue(char **cmd, sexp rv) {
+	char *cmds;
 	sexp_gc_var2(epilogue, str);
 	sexp_gc_preserve2(ctx,epilogue, str);
+	cmds = string_array_as_string(-1,cmd);
 	str = SEXP_NULL;
+	if (1) {
+		char *rvss;
+		rvss = write_to_string(rv);
+		fprintf(stdout,"\nEPILOGUE %s\n", cmds);
+		Free(rvss);
+	}
 	if (cmds) {
 		str = sexp_cons(ctx, rv, str);
 		str = sexp_cons(ctx, sexp_c_string(ctx,cmds, -1), str);
 		epilogue = sexp_get_procedure(ctx, env, IGOR_COMMAND_EPILOGUE);
 		if (sexp_procedurep(epilogue)) sexp_apply(ctx, epilogue, str);
 	}
+	Free(cmds);
 	sexp_gc_release2(ctx);
 }
 
@@ -4977,8 +4856,6 @@ void command_loop(FILE *f) {
 	char **argv = NULL;
 	int line_num = 0, N = 0;
 	sexp rv = SEXP_FALSE;
-
-	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
 #if 0
 	cmd = strdup("a b c d");
@@ -5024,13 +4901,11 @@ void command_loop(FILE *f) {
 
 			argv = tokenise_cmdline(cmd);
 			if (!argv) {
-				//fprintf(stderr,"DEBUGGING: finishing command loop\n");
 				return;
 			}
 			a = argv;
 			for (N = 0; argv && argv[N]; N++);
 
-//			fprintf(stderr,"#if() command_loop: %s\n", cmd);
 
 #if 0
 			for (i = 0; i <= N; i++) {
@@ -5041,16 +4916,6 @@ void command_loop(FILE *f) {
 
 			while (a && *a) {
 				a = command_block(a, 1, -1, -1, -1);
-#if 0
-				if (a - argv >= N) fprintf(stderr,"At end of command line\n");
-				for (n = 0; n < N && argv[n]; n++) {
-					fprintf(stderr,"CL before[%d] = %s\n", n, argv[n]);
-				}
-				for (n = 0; a[n]; n++) {
-					fprintf(stderr,".. executed[%d] = %s\n", n, argv[n]);
-				}
-#endif				
-
 				// *** EAT ANYTHING THAT  NEEDS EATING
 			}
 
@@ -5073,9 +4938,6 @@ void command_loop(FILE *f) {
 	int line_num = 0;
 	//sexp rv = SEXP_TRUE;
 
-	//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
-
-	
 	if (!f && !running_script) { // reset the file descriptors
 		dup2(IN, 0);
 		dup2(OUT,1);
@@ -5125,7 +4987,7 @@ void command_loop(FILE *f) {
 			command_block(argv, 1, -1, -1, -1);
 			//dump_rs();
 #endif
-				//if (argv) delete_string_array(argv);
+				//if (argv) delete_string_array(-1, argv);
 			Free(argv);
 			argv = NULL;
 		}
@@ -5150,11 +5012,7 @@ sexp run_source_file(char *filename) {
 	FILE *f = NULL;
 
 	if (access(filename, R_OK) == Ok) {
-		fprintf(stderr,"Found %s\n", filename);
-		
 		f = fopen(filename, "r");
-
-		//if (f == stdin) fprintf(stderr,"** The file seems to be stdin! (%s)\n", __PRETTY_FUNCTION__);
 
 		if (f) {
 			fprintf(stderr,"Executing commands from %s\n", filename);
